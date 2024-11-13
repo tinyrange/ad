@@ -10,11 +10,34 @@ import (
 	"github.com/tinyrange/ad/pkg/wireguard"
 )
 
-const RESP = "Hello, World!"
+func checkResponse(wg *wireguard.Wireguard, url string, expected string) error {
+	client := http.Client{
+		Transport: &http.Transport{
+			DialContext: wg.DialContext,
+		},
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to get: %w", err)
+	}
+	defer resp.Body.Close()
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if string(content) != expected {
+		return fmt.Errorf("unexpected response: %s", content)
+	}
+
+	return nil
+}
 
 func appMain() error {
 	slog.Info("starting server")
-	wg, err := wireguard.NewServer("10.0.0.1", []string{"0.0.0.0/0"})
+	wg, err := wireguard.NewServer("10.0.0.1")
 	if err != nil {
 		return fmt.Errorf("failed to create wireguard server: %w", err)
 	}
@@ -32,45 +55,74 @@ func appMain() error {
 		return fmt.Errorf("failed to create wireguard client: %w", err)
 	}
 
-	listen, err := wg.ListenTCPAddr("100.54.1.10:http")
-	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
+	slog.Info("dialing basic")
+
+	{
+		listen, err := wg.ListenTCPAddr("100.54.1.10:http")
+		if err != nil {
+			return fmt.Errorf("failed to listen: %w", err)
+		}
+
+		go func() {
+			mux := http.NewServeMux()
+
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("Hello, World"))
+			})
+
+			http.Serve(listen, mux)
+		}()
 	}
 
-	go func() {
-		mux := http.NewServeMux()
-
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(RESP))
-		})
-
-		http.Serve(listen, mux)
-	}()
-
-	client := http.Client{
-		Transport: &http.Transport{
-			DialContext: wg2.DialContext,
-		},
+	if err := checkResponse(wg2, "http://100.54.1.10", "Hello, World"); err != nil {
+		return err
 	}
 
-	slog.Info("dialing")
+	slog.Info("test any ip address")
 
-	resp, err := client.Get("http://100.54.1.10")
-	if err != nil {
-		return fmt.Errorf("failed to get: %w", err)
+	{
+		listen, err := wg.ListenTCPAddr("0.0.0.0:http")
+		if err != nil {
+			return fmt.Errorf("failed to listen: %w", err)
+		}
+
+		go func() {
+			mux := http.NewServeMux()
+
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("Hello, World"))
+			})
+
+			http.Serve(listen, mux)
+		}()
 	}
-	defer resp.Body.Close()
 
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+	if err := checkResponse(wg2, "http://30.54.0.10", "Hello, World"); err != nil {
+		return err
 	}
 
-	if string(content) != RESP {
-		return fmt.Errorf("unexpected response: %s", content)
+	slog.Info("other direction")
+
+	{
+		listen, err := wg2.ListenTCPAddr("0.0.0.0:0")
+		if err != nil {
+			return fmt.Errorf("failed to listen: %w", err)
+		}
+
+		go func() {
+			mux := http.NewServeMux()
+
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte("Hello, World"))
+			})
+
+			http.Serve(listen, mux)
+		}()
 	}
 
-	slog.Info("response", "content", string(content))
+	if err := checkResponse(wg, "http://30.54.0.10", "Hello, World"); err != nil {
+		return err
+	}
 
 	return nil
 }

@@ -131,15 +131,37 @@ allowed_ip=0.0.0.0/0
 endpoint=%s`, privateKey, publicKey, endpoint), nil
 }
 
-func (wg *Wireguard) handleTcpConn(loc *net.TCPAddr) (*listener, error) {
-	locString := loc.String()
-
-	listen, ok := wg.listeners[locString]
-	if !ok {
-		return nil, fmt.Errorf("no listener for connection to: %s", locString)
+func (wg *Wireguard) getListenerForAddr(loc *net.TCPAddr) (*listener, error) {
+	// Try a direct match.
+	if listen, ok := wg.listeners[loc.String()]; ok {
+		return listen, nil
 	}
 
-	return listen, nil
+	// Try matching on any port number.
+	if listen, ok := wg.listeners[(&net.TCPAddr{
+		IP:   loc.IP,
+		Port: 0,
+	}).String()]; ok {
+		return listen, nil
+	}
+
+	// Try matching on any IP address.
+	if listen, ok := wg.listeners[(&net.TCPAddr{
+		IP:   net.IP{0, 0, 0, 0},
+		Port: loc.Port,
+	}).String()]; ok {
+		return listen, nil
+	}
+
+	// Fall back to the default root if it exists.
+	if listen, ok := wg.listeners[(&net.TCPAddr{
+		IP:   net.IP{0, 0, 0, 0},
+		Port: 0,
+	}).String()]; ok {
+		return listen, nil
+	}
+
+	return nil, fmt.Errorf("no listener for connection to: %s", loc.String())
 }
 
 type listener struct {
@@ -231,7 +253,7 @@ func (wg *Wireguard) handleTcp(r *tcp.ForwarderRequest) {
 
 	conn := gonet.NewTCPConn(&wq, ep)
 
-	listen, err := wg.handleTcpConn(loc)
+	listen, err := wg.getListenerForAddr(loc)
 	if err != nil {
 		slog.Error("error handling tcp conn", "err", err)
 		conn.Close()
@@ -264,7 +286,7 @@ func (wg *Wireguard) setupForwarding() error {
 	return nil
 }
 
-func NewServer(addr string, allowed []string) (*Wireguard, error) {
+func NewServer(addr string) (*Wireguard, error) {
 	localAddr, err := netip.ParseAddr(addr)
 	if err != nil {
 		return nil, err
@@ -299,7 +321,7 @@ func NewServer(addr string, allowed []string) (*Wireguard, error) {
 		dev:       dev,
 		stack:     stack,
 		publicKey: pk,
-		allowed:   allowed,
+		allowed:   []string{"0.0.0.0/0"},
 		listeners: make(map[string]*listener),
 	}
 
