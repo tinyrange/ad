@@ -1,0 +1,29 @@
+version: 1
+tinyrange:
+  path: tinyrange
+frontend:
+  address: 127.0.0.1:5100
+vulnbox:
+  template: vulnbox/vulnbox.yml
+  init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
+# bots:
+#   enabled: true
+#   template: vulnbox/bot.yml
+#   events:
+#     vuln1:
+#       command: python3 /app/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+scorebot:
+  template: scorebot/scorebot.yml
+  config_file: game.json
+  command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+tick_rate: 0.5s
+duration: 30s
+timeline:
+  - at: 5s
+    event: network/open/bots
+  - at: 10s
+    event: bot/vuln1
+  - at: 15s
+    event: network/open
+  - at: 25s
+    event: scoreboard/freeze

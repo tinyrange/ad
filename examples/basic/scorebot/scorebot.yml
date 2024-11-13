@@ -1,0 +1,7 @@
+version: 1
+builder: alpine@3.20
+files:
+    - scoring.py
+packages:
+    - python3
+    - py3-requests
