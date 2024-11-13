@@ -2,7 +2,8 @@ version: 1
 tinyrange:
   path: tinyrange
 frontend:
-  address: 127.0.0.1:5100
+  address: "127.0.0.1"
+  port: 5100
 vulnbox:
   template: vulnbox/vulnbox.yml
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
@@ -16,6 +17,7 @@ scorebot:
   template: scorebot/scorebot.yml
   config_file: game.json
   command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+  health_check: python3 /root/scoring.py health
 tick_rate: 0.5s
 duration: 30s
 timeline:

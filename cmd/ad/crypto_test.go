@@ -42,7 +42,9 @@ func TestSigner(t *testing.T) {
 }
 
 func TestGenerateFlag(t *testing.T) {
-	flag := GenerateFlag(0, 1, 2, TEST_SIGNER)
+	gen := NewFlagGenerator("flag{", "}")
+
+	flag := gen.Generate(0, 1, 2, TEST_SIGNER)
 
 	expected := "flag{0.1.2.wdnk4iF4bRt1CEEcUhuvKTxpNDm53IuOkEEnleBz1mHPXqafU6qF4R5K-4YjXOgAreSGr2lHJ7pUN2dsirv-Cg}"
 
@@ -52,11 +54,13 @@ func TestGenerateFlag(t *testing.T) {
 }
 
 func TestVerifyFlag(t *testing.T) {
+	gen := NewFlagGenerator("flag{", "}")
+
 	public := TEST_SIGNER.Public()
 
 	flag := "flag{0.1.2.wdnk4iF4bRt1CEEcUhuvKTxpNDm53IuOkEEnleBz1mHPXqafU6qF4R5K-4YjXOgAreSGr2lHJ7pUN2dsirv-Cg}"
 
-	tickId, teamId, serviceId, ok := VerifyFlag(public, flag)
+	tickId, teamId, serviceId, ok := gen.Verify(public, flag)
 	if !ok {
 		t.Fatal("failed to verify flag")
 	}

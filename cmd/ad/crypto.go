@@ -47,20 +47,20 @@ func GenerateKey() (*Signer, error) {
 	return &Signer{PrivateKey: priv}, nil
 }
 
-const (
-	FLAG_PREFIX = "flag{"
-	FLAG_SUFFIX = "}"
-)
+type FlagGenerator struct {
+	Prefix string
+	Suffix string
+}
 
-func GenerateFlag(tickId int, teamId int, serviceId int, key *Signer) string {
+func (gen *FlagGenerator) Generate(tickId int, teamId int, serviceId int, key *Signer) string {
 	data := fmt.Sprintf("%d.%d.%d", tickId, teamId, serviceId)
 
 	sig := key.Sign([]byte(data))
 
-	return fmt.Sprintf("%s%s.%s%s", FLAG_PREFIX, data, sig, FLAG_SUFFIX)
+	return fmt.Sprintf("%s%s.%s%s", gen.Prefix, data, sig, gen.Suffix)
 }
 
-func VerifyFlag(public string, flag string) (tickId int, teamId int, serviceId int, ok bool) {
+func (gen *FlagGenerator) Verify(public string, flag string) (tickId int, teamId int, serviceId int, ok bool) {
 	var err error
 
 	tickId = -1
@@ -68,11 +68,11 @@ func VerifyFlag(public string, flag string) (tickId int, teamId int, serviceId i
 	serviceId = -1
 	ok = false
 
-	if !strings.HasPrefix(flag, FLAG_PREFIX) || !strings.HasSuffix(flag, FLAG_SUFFIX) {
+	if !strings.HasPrefix(flag, gen.Prefix) || !strings.HasSuffix(flag, gen.Suffix) {
 		return
 	}
 
-	flag = strings.TrimSuffix(strings.TrimPrefix(flag, FLAG_PREFIX), FLAG_SUFFIX)
+	flag = strings.TrimSuffix(strings.TrimPrefix(flag, gen.Prefix), gen.Suffix)
 
 	tokens := strings.Split(flag, ".")
 
@@ -102,4 +102,8 @@ func VerifyFlag(public string, flag string) (tickId int, teamId int, serviceId i
 	ok = Verify(public, []byte(data), sig)
 
 	return
+}
+
+func NewFlagGenerator(prefix, suffix string) *FlagGenerator {
+	return &FlagGenerator{Prefix: prefix, Suffix: suffix}
 }

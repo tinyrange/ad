@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tinyrange/wireguard"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
@@ -45,20 +48,84 @@ var (
 	_ yaml.Unmarshaler = &Duration{}
 )
 
+type wireguardInstance struct {
+	wg         *wireguard.Wireguard
+	peerConfig string
+}
+
 // A wireguard router that generates wireguard configurations.
 type WireguardRouter struct {
+	publicAddress string
+	serverUrl     string
+	endpoints     map[string]*wireguardInstance
 }
 
 func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
-	return "", fmt.Errorf("WireguardRouter.AddEndpoint not implemented")
+	slog.Info("adding wireguard endpoint", "instance", instanceId)
+
+	wg, err := wireguard.NewServer("10.40.0.1")
+	if err != nil {
+		return "", err
+	}
+
+	listen, err := wg.ListenTCPAddr("8.8.8.8:80")
+	if err != nil {
+		return "", err
+	}
+	go func() {
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				slog.Error("failed to accept connection", "err", err)
+				continue
+			}
+
+			conn.Close()
+		}
+	}()
+
+	r.endpoints[instanceId] = &wireguardInstance{
+		wg: wg,
+	}
+
+	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	if err != nil {
+		return "", err
+	}
+
+	r.endpoints[instanceId].peerConfig = peerConfig
+
+	return fmt.Sprintf("%s/wireguard/%s", r.serverUrl, instanceId), nil
 }
 
-func (r *WireguardRouter) Dial(instanceId string, network, address string) (net.Conn, error) {
-	return nil, fmt.Errorf("WireguardRouter.Dial not implemented")
+func (r *WireguardRouter) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
+	slog.Info("dialing", "instance", instanceId, "network", network, "address", address)
+
+	instance, ok := r.endpoints[instanceId]
+	if !ok {
+		return nil, fmt.Errorf("instance not found")
+	}
+
+	return instance.wg.DialContext(ctx, network, address)
 }
 
 func (r *WireguardRouter) ServeConfig(w http.ResponseWriter, req *http.Request) {
+	instanceId := req.PathValue("instance")
 
+	slog.Debug("serving wireguard config", "instance", instanceId)
+
+	instance, ok := r.endpoints[instanceId]
+	if !ok {
+		http.Error(w, "instance not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write([]byte(instance.peerConfig))
+}
+
+func (r *WireguardRouter) registerMux(mux *http.ServeMux) {
+	mux.HandleFunc("GET /wireguard/{instance}", r.ServeConfig)
 }
 
 type TinyRangeInstance struct {
@@ -74,11 +141,20 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 		return fmt.Errorf("template %s not found", templateName)
 	}
 
-	// Run `tinyrange run-vm --template <template>` to start the instance.
-	cmd := exec.Command(t.game.Config.TinyRange.Path, "run-vm",
+	args := []string{
+		t.game.Config.TinyRange.Path, "run-vm",
 		"--wireguard", wireguardConfigUrl,
-		template,
-	)
+		"--debug",
+	}
+
+	if *verbose {
+		args = append(args, "--verbose")
+	}
+
+	args = append(args, template)
+
+	// Run `tinyrange run-vm --template <template>` to start the instance.
+	cmd := exec.Command(args[0], args[1:]...)
 
 	cmd.Stderr = os.Stderr
 
@@ -92,9 +168,12 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 	return nil
 }
 
-func (t *TinyRangeInstance) RunCommand(command string) (string, error) {
+func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	// Use game.Dial to connect to the instance.
-	conn, err := t.game.Dial(t.instanceId, "tcp", "localhost:2222")
+	conn, err := t.game.DialContext(ctx, t.instanceId, "tcp", "10.42.0.2:2222")
 	if err != nil {
 		return "", fmt.Errorf("failed to dial instance: %w", err)
 	}
@@ -102,11 +181,12 @@ func (t *TinyRangeInstance) RunCommand(command string) (string, error) {
 
 	// The instance is listening on SSH on port 2222.
 	// Use the hardcoded password "insecurepassword" to login.
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, "localhost:2222", &ssh.ClientConfig{
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, "10.42.0.2:2222", &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
 			ssh.Password("insecurepassword"),
 		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create ssh client: %w", err)
@@ -121,10 +201,12 @@ func (t *TinyRangeInstance) RunCommand(command string) (string, error) {
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
 
+	slog.Info("running command", "instance", t.instanceId, "command", command)
+
 	// Run the command.
 	out, err := session.CombinedOutput(command)
-	if err != nil {
-		return "", fmt.Errorf("failed to run command: %w", err)
+	if err != nil && err != io.EOF {
+		return string(out), fmt.Errorf("failed to run command: %w", err)
 	}
 
 	return string(out), nil
@@ -140,14 +222,15 @@ type TinyRangeConfig struct {
 
 type FrontendConfig struct {
 	Address string `yaml:"address"`
+	Port    int    `yaml:"port"`
+}
+
+func (f *FrontendConfig) Url() string {
+	return fmt.Sprintf("http://%s:%d", f.Address, f.Port)
 }
 
 type VulnboxConfig struct {
 	Template string `yaml:"template"`
-}
-
-func (v *VulnboxConfig) Start() (*TinyRangeInstance, error) {
-	return nil, fmt.Errorf("not implemented")
 }
 
 type EventDefinition struct {
@@ -163,12 +246,13 @@ type BotConfig struct {
 }
 
 func (b *BotConfig) Start() (*TinyRangeInstance, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, fmt.Errorf("BotConfig.Start not implemented")
 }
 
 type ScoreBotConfig struct {
-	Template string `yaml:"template"`
-	Command  string `yaml:"command"`
+	Template    string `yaml:"template"`
+	Command     string `yaml:"command"`
+	HealthCheck string `yaml:"health_check"`
 
 	instance *TinyRangeInstance
 }
@@ -184,7 +268,7 @@ func (v *ScoreBotConfig) Stop() error {
 }
 
 func (v *ScoreBotConfig) Start(game *AttackDefenseGame) error {
-	inst, err := game.startInstanceFromTemplate(v.Template)
+	inst, err := game.startInstanceFromTemplate("scorebot", v.Template)
 	if err != nil {
 		return err
 	}
@@ -194,8 +278,26 @@ func (v *ScoreBotConfig) Start(game *AttackDefenseGame) error {
 	return nil
 }
 
+func (v *ScoreBotConfig) Wait() error {
+	for {
+		resp, err := v.instance.RunCommand(v.HealthCheck, 1*time.Second)
+		if err == nil && resp == "healthy" {
+			slog.Info("scorebot healthy")
+			return nil
+		}
+
+		if err != nil {
+			slog.Error("failed to run health check", "err", err)
+		} else if resp != "healthy" {
+			slog.Error("scorebot not healthy", "resp", resp)
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team) error {
-	return fmt.Errorf("not implemented")
+	return fmt.Errorf("ScoreBotConfig.Run not implemented")
 }
 
 type TimelineEvent struct {
@@ -257,7 +359,7 @@ func (t *Team) Stop() error {
 
 func (t *Team) Start(game *AttackDefenseGame) error {
 	// Start the team instance.
-	inst, err := game.startInstanceFromTemplate(game.Config.Vulnbox.Template)
+	inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName, game.Config.Vulnbox.Template)
 	if err != nil {
 		return err
 	}
@@ -265,7 +367,7 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 
 	// If there is a bot, start the bot instance.
 	if game.Config.Bots.Enabled {
-		inst, err := game.startInstanceFromTemplate(game.Config.Bots.Template)
+		inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName+"_bot", game.Config.Bots.Template)
 		if err != nil {
 			return err
 		}
@@ -312,15 +414,15 @@ func (game *AttackDefenseGame) ResolvePath(path string) string {
 }
 
 func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) error {
-	templateFilename = game.ResolvePath(templateFilename)
+	resolvedFilename := game.ResolvePath(templateFilename)
 
 	// Run `tinyrange login --template --load-config <templateFilename>` to cache the template.
 	cmd := exec.Command(game.Config.TinyRange.Path, "login",
 		"--template",
-		"--load-config", filepath.Base(templateFilename),
+		"--load-config", filepath.Base(resolvedFilename),
 	)
 
-	cmd.Dir = filepath.Dir(templateFilename)
+	cmd.Dir = filepath.Dir(resolvedFilename)
 
 	cmd.Stderr = os.Stderr
 
@@ -336,8 +438,8 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 	return nil
 }
 
-func (game *AttackDefenseGame) Dial(instanceId string, network, address string) (net.Conn, error) {
-	return game.Router.Dial(instanceId, network, address)
+func (game *AttackDefenseGame) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
+	return game.Router.DialContext(ctx, instanceId, network, address)
 }
 
 func (game *AttackDefenseGame) generateWireguardConfig() (string, string, error) {
@@ -349,15 +451,15 @@ func (game *AttackDefenseGame) generateWireguardConfig() (string, string, error)
 	instanceId := instanceUuid.String()
 
 	// Generate the wireguard config.
-	config, err := game.Router.AddEndpoint(instanceId)
+	configUrl, err := game.Router.AddEndpoint(instanceId)
 	if err != nil {
 		return "", "", err
 	}
 
-	return instanceId, config, nil
+	return instanceId, configUrl, nil
 }
 
-func (game *AttackDefenseGame) startInstanceFromTemplate(templateFilename string) (*TinyRangeInstance, error) {
+func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFilename string) (*TinyRangeInstance, error) {
 	// Check if the template is already cached.
 	if _, ok := game.tinyRangeTemplates[templateFilename]; !ok {
 		if err := game.cacheTinyRangeTemplate(templateFilename); err != nil {
@@ -370,6 +472,8 @@ func (game *AttackDefenseGame) startInstanceFromTemplate(templateFilename string
 	if err != nil {
 		return nil, err
 	}
+
+	slog.Info("starting instance", "template", templateFilename, "instance", instanceId, "name", name)
 
 	// Start the instance.
 	inst := &TinyRangeInstance{
@@ -469,12 +573,14 @@ func (game *AttackDefenseGame) startServer() error {
 		fmt.Fprintf(w, "Attack/Defense Game")
 	})
 
+	game.Router.registerMux(handler)
+
 	game.server = &http.Server{
 		Addr:    game.Config.Frontend.Address,
 		Handler: handler,
 	}
 
-	listener, err := net.Listen("tcp", game.Config.Frontend.Address)
+	listener, err := net.Listen("tcp", game.Config.Frontend.Address+":"+fmt.Sprint(game.Config.Frontend.Port))
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
@@ -514,7 +620,11 @@ func (game *AttackDefenseGame) Run() error {
 	// Create a new timer for the end of the game.
 	endTime := time.NewTimer(game.Config.Duration.Duration)
 
-	game.Router = &WireguardRouter{}
+	game.Router = &WireguardRouter{
+		serverUrl:     game.Config.Frontend.Url(),
+		publicAddress: game.Config.Frontend.Address,
+		endpoints:     make(map[string]*wireguardInstance),
+	}
 
 	// Start the built in web server.
 	if err := game.startServer(); err != nil {
@@ -531,9 +641,13 @@ func (game *AttackDefenseGame) Run() error {
 	})
 
 	// Boot the scorebot.
-	// TODO(joshua): Wait until the scorebot is started.
 	if err := game.Config.ScoreBot.Start(game); err != nil {
 		return fmt.Errorf("failed to start scorebot: %w", err)
+	}
+
+	// Wait for the scorebot to boot.
+	if err := game.Config.ScoreBot.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for scorebot: %w", err)
 	}
 
 	// Initialize all initial teams.
@@ -565,12 +679,18 @@ outer:
 }
 
 var (
-	configFile = flag.String("config", "", "The config file to start the Attack/Defense server with.")
-	debugTeam  = flag.String("debug-team", "", "Create a team for debugging.")
+	configFile    = flag.String("config", "", "The config file to start the Attack/Defense server with.")
+	debugTeam     = flag.String("debug-team", "", "Create a team for debugging.")
+	tinyrangePath = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
+	verbose       = flag.Bool("verbose", false, "Enable verbose logging.")
 )
 
 func appMain() error {
 	flag.Parse()
+
+	if *verbose {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 
 	if *configFile == "" {
 		flag.Usage()
@@ -592,6 +712,10 @@ func appMain() error {
 
 	if config.Version != CURRENT_CONFIG_VERSION {
 		return fmt.Errorf("mismatched version: %d != %d", config.Version, CURRENT_CONFIG_VERSION)
+	}
+
+	if *tinyrangePath != "" {
+		config.TinyRange.Path = *tinyrangePath
 	}
 
 	game := &AttackDefenseGame{

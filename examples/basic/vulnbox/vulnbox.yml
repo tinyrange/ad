@@ -1,0 +1,8 @@
+version: 1
+builder: alpine@3.20
+files:
+    - app.py
+    - init.py
+packages:
+    - python3
+    - py3-flask
