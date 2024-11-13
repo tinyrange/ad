@@ -4,7 +4,7 @@ go 1.23.3
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/tinyrange/wireguard v0.0.0-20241113104731-decdb84f532e
+	github.com/tinyrange/wireguard v0.0.1
 	golang.org/x/crypto v0.29.0
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tinyrange/ad/pkg/common"
 	"github.com/tinyrange/wireguard"
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
@@ -132,6 +134,10 @@ type TinyRangeInstance struct {
 	game       *AttackDefenseGame
 	cmd        *exec.Cmd
 	instanceId string
+}
+
+func (t *TinyRangeInstance) Dial(network, address string) (net.Conn, error) {
+	return t.game.Router.DialContext(context.Background(), t.instanceId, network, address)
 }
 
 func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string) error {
@@ -406,6 +412,12 @@ type AttackDefenseGame struct {
 	// It points to the VM config filename.
 	tinyRangeTemplates map[string]string
 
+	// SshServer is the to create for admin connections.
+	SshServer string
+
+	// SshServerHostKey is the host key for the SSH server.
+	SshServerHostKey string
+
 	server *http.Server
 }
 
@@ -594,6 +606,111 @@ func (game *AttackDefenseGame) startServer() error {
 	return nil
 }
 
+func (game *AttackDefenseGame) instanceFromName(name string) (*TinyRangeInstance, error) {
+	if name == "scorebot" {
+		return game.Config.ScoreBot.instance, nil
+	}
+
+	for _, team := range game.Teams {
+		if name == fmt.Sprintf("team_%d", team.ID) {
+			return team.teamInstance, nil
+		}
+	}
+
+	return nil, fmt.Errorf("instance not found")
+}
+
+func (game *AttackDefenseGame) startSshServer() error {
+	slog.Info("starting ssh server", "addr", game.SshServer)
+
+	listen, err := net.Listen("tcp", game.SshServer)
+	if err != nil {
+		return fmt.Errorf("failed to listen: %w", err)
+	}
+
+	config := &ssh.ServerConfig{
+		NoClientAuth: true,
+		NoClientAuthCallback: func(conn ssh.ConnMetadata) (*ssh.Permissions, error) {
+			return nil, nil
+		},
+	}
+
+	privateBytes, err := os.ReadFile(game.SshServerHostKey)
+	if err != nil {
+		return fmt.Errorf("failed to read private key: %w", err)
+	}
+
+	private, err := ssh.ParsePrivateKey(privateBytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	config.AddHostKey(private)
+
+	go func() {
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				slog.Error("failed to accept connection", "err", err)
+				return
+			}
+
+			slog.Info("accepted connection", "remote", conn.RemoteAddr())
+
+			go func() {
+				sshConn, chans, reqs, err := ssh.NewServerConn(conn, config)
+				if err != nil {
+					slog.Error("failed to handshake", "err", err)
+					return
+				}
+
+				_ = sshConn
+
+				go ssh.DiscardRequests(reqs)
+
+				for newChannel := range chans {
+					if newChannel.ChannelType() == "direct-tcpip" {
+						data := newChannel.ExtraData()
+
+						hostnameLen := binary.BigEndian.Uint32(data[:4])
+						hostname := string(data[4 : 4+hostnameLen])
+
+						instance, err := game.instanceFromName(hostname)
+						if err != nil {
+							_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("instance not found: %s", hostname))
+							return
+						}
+
+						other, err := instance.Dial("tcp", "10.42.0.2:2222")
+						if err != nil {
+							_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("failed to dial instance: %s", err))
+							return
+						}
+
+						chn, reqs, err := newChannel.Accept()
+						if err != nil {
+							slog.Error("failed to accept channel", "err", err)
+							return
+						}
+						defer chn.Close()
+
+						go ssh.DiscardRequests(reqs)
+
+						if err := common.Proxy(chn, other, 4096); err != nil {
+							slog.Error("failed to proxy", "err", err)
+						}
+					} else {
+						_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("unknown channel type: %s", newChannel.ChannelType()))
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	return nil
+}
+
 func (game *AttackDefenseGame) Run() error {
 	// Ensure we clean up all instances when we're done.
 	defer func() {
@@ -629,6 +746,13 @@ func (game *AttackDefenseGame) Run() error {
 	// Start the built in web server.
 	if err := game.startServer(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	if game.SshServer != "" {
+		// Start the SSH server.
+		if err := game.startSshServer(); err != nil {
+			return fmt.Errorf("failed to start ssh server: %w", err)
+		}
 	}
 
 	// Log the start of the game.
@@ -679,10 +803,12 @@ outer:
 }
 
 var (
-	configFile    = flag.String("config", "", "The config file to start the Attack/Defense server with.")
-	debugTeam     = flag.String("debug-team", "", "Create a team for debugging.")
-	tinyrangePath = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
-	verbose       = flag.Bool("verbose", false, "Enable verbose logging.")
+	configFile       = flag.String("config", "", "The config file to start the Attack/Defense server with.")
+	debugTeam        = flag.String("debug-team", "", "Create a team for debugging.")
+	tinyrangePath    = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
+	verbose          = flag.Bool("verbose", false, "Enable verbose logging.")
+	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
+	sshServerHostKey = flag.String("ssh-server-host-key", "", "The SSH server host key.")
 )
 
 func appMain() error {
@@ -722,6 +848,8 @@ func appMain() error {
 		Config:             config,
 		Events:             make(map[string]*Event),
 		tinyRangeTemplates: make(map[string]string),
+		SshServer:          *sshServer,
+		SshServerHostKey:   *sshServerHostKey,
 	}
 
 	if *debugTeam != "" {
