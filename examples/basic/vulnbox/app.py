@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template_string
 import json
 import os
+import sys
 
 app = Flask(__name__)
 DATA_FILE = "data.json"
@@ -22,6 +23,12 @@ def index():
             <textarea name="content" rows="10" cols="30"></textarea><br>
             <input type="submit" value="Submit">
         </form>
+        <h2>Pastes</h2>
+        <ul>
+            {% for id, content in entries.items() %}
+                <li><a href="/paste/{{ id }}">{{ id }}</a></li>
+            {% endfor %}
+        </ul>
     """,
         entries=data,
     )

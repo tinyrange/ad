@@ -6,3 +6,4 @@ files:
 packages:
     - python3
     - py3-flask
+    - openrc

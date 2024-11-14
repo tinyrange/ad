@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -159,7 +161,7 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 
 	args = append(args, template)
 
-	// Run `tinyrange run-vm --template <template>` to start the instance.
+	// Run `tinyrange run-vm <template>` to start the instance.
 	cmd := exec.Command(args[0], args[1:]...)
 
 	cmd.Stderr = os.Stderr
@@ -175,6 +177,10 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 }
 
 func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (string, error) {
+	if t.game == nil || t.cmd == nil {
+		return "", fmt.Errorf("instance not started")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -219,7 +225,21 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 }
 
 func (t *TinyRangeInstance) Stop() error {
-	return fmt.Errorf("TinyRangeInstance.Stop not implemented")
+	if t.cmd == nil {
+		return fmt.Errorf("instance not started")
+	}
+
+	if runtime.GOOS == "windows" {
+		if err := t.cmd.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to kill process: %w", err)
+		}
+	} else {
+		if err := t.cmd.Process.Signal(os.Interrupt); err != nil {
+			return fmt.Errorf("failed to send interrupt: %w", err)
+		}
+	}
+
+	return nil
 }
 
 type TinyRangeConfig struct {
@@ -236,7 +256,8 @@ func (f *FrontendConfig) Url() string {
 }
 
 type VulnboxConfig struct {
-	Template string `yaml:"template"`
+	Template     string `yaml:"template"`
+	InitTemplate string `yaml:"init"`
 }
 
 type EventDefinition struct {
@@ -261,6 +282,7 @@ type ScoreBotConfig struct {
 	HealthCheck string `yaml:"health_check"`
 
 	instance *TinyRangeInstance
+	tpl      *template.Template
 }
 
 func (v *ScoreBotConfig) Stop() error {
@@ -302,8 +324,36 @@ func (v *ScoreBotConfig) Wait() error {
 	}
 }
 
-func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team) error {
-	return fmt.Errorf("ScoreBotConfig.Run not implemented")
+func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team, flag string) error {
+	if sb.tpl == nil {
+		tpl, err := template.New("command").Parse(sb.Command)
+		if err != nil {
+			return err
+		}
+
+		sb.tpl = tpl
+	}
+
+	var buf strings.Builder
+
+	if err := sb.tpl.Execute(&buf, &struct {
+		TeamIP  string
+		NewFlag string
+	}{
+		TeamIP:  team.IP(),
+		NewFlag: flag,
+	}); err != nil {
+		return err
+	}
+
+	resp, err := sb.instance.RunCommand(buf.String(), 5*time.Second)
+	if err != nil {
+		return err
+	}
+
+	slog.Info("scorebot response", "team", team.DisplayName, "resp", resp)
+
+	return fmt.Errorf("not implemented")
 }
 
 type TimelineEvent struct {
@@ -347,6 +397,10 @@ type Team struct {
 	botInstance  *TinyRangeInstance
 }
 
+func (t *Team) IP() string {
+	return net.IPv4(10, 42, 0, 10+byte(t.ID)).String()
+}
+
 func (t *Team) Stop() error {
 	if t.teamInstance != nil {
 		if err := t.teamInstance.Stop(); err != nil {
@@ -363,6 +417,37 @@ func (t *Team) Stop() error {
 	return nil
 }
 
+func (t *Team) runInitCommand(game *AttackDefenseGame) error {
+	initTpl, err := template.New("init").Parse(game.Config.Vulnbox.InitTemplate)
+	if err != nil {
+		return err
+	}
+
+	var buf strings.Builder
+
+	if err := initTpl.Execute(&buf, &struct {
+		TeamIP   string
+		TeamName string
+	}{
+		TeamIP:   t.IP(),
+		TeamName: t.DisplayName,
+	}); err != nil {
+		return err
+	}
+
+	// Run the init command.
+	resp, err := t.teamInstance.RunCommand(buf.String(), 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to run init command(%w): %s", err, resp)
+	}
+
+	if strings.Trim(resp, " \n") != "success" {
+		return fmt.Errorf("init command failed: %s", resp)
+	}
+
+	return nil
+}
+
 func (t *Team) Start(game *AttackDefenseGame) error {
 	// Start the team instance.
 	inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName, game.Config.Vulnbox.Template)
@@ -370,6 +455,10 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		return err
 	}
 	t.teamInstance = inst
+
+	if err := t.runInitCommand(game); err != nil {
+		return err
+	}
 
 	// If there is a bot, start the bot instance.
 	if game.Config.Bots.Enabled {
@@ -389,6 +478,9 @@ type AttackDefenseGame struct {
 
 	// Signer is the signer for the game.
 	Signer *Signer
+
+	// FlagGen is the flag generator for the game.
+	FlagGen *FlagGenerator
 
 	// Ticker is a ticker that ticks every tick rate.
 	Ticker *time.Ticker
@@ -443,9 +535,18 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 		return fmt.Errorf("failed to cache tinyrange template: %w", err)
 	}
 
-	outString := strings.Trim(string(out), "\n")
+	// get only the last line in out.
+	lines := strings.Split(string(out), "\n")
+	if len(lines) == 0 {
+		return fmt.Errorf("failed to cache tinyrange template: no output")
+	}
 
-	game.tinyRangeTemplates[templateFilename] = outString
+	last := lines[len(lines)-1]
+	if last == "" {
+		last = lines[len(lines)-2]
+	}
+
+	game.tinyRangeTemplates[templateFilename] = last
 
 	return nil
 }
@@ -550,7 +651,9 @@ func (game *AttackDefenseGame) Tick() error {
 	// Send the scorebot command to each team.
 	// TODO(joshua): Delay this randomly during the tick interval.
 	if err := game.ForAllTeams(func(t *Team) error {
-		return game.Config.ScoreBot.Run(game, t)
+		newFlag := game.FlagGen.Generate(int(game.CurrentTick), t.ID, 0, game.Signer)
+
+		return game.Config.ScoreBot.Run(game, t, newFlag)
 	}); err != nil {
 		slog.Error("failed to run scorebot for each team", "err", err)
 	}
@@ -574,6 +677,8 @@ func (game *AttackDefenseGame) GenerateKeys() error {
 	}
 
 	game.Signer = signer
+
+	game.FlagGen = NewFlagGenerator("flag{", "}")
 
 	return nil
 }
