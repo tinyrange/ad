@@ -26,7 +26,10 @@ def index():
         <h2>Pastes</h2>
         <ul>
             {% for id, content in entries.items() %}
-                <li><a href="/paste/{{ id }}">{{ id }}</a></li>
+                <li>
+                    <a href="/paste/{{ id }}">{{ id }}</a>
+                    <pre>{{ content }}</pre>
+                </li>
             {% endfor %}
         </ul>
     """,
@@ -54,4 +57,4 @@ def get_paste(paste_id):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)

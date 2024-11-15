@@ -7,6 +7,9 @@ frontend:
 vulnbox:
   template: vulnbox/vulnbox.yml
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
+  services:
+    hello:
+      port: 5000
 # bots:
 #   enabled: true
 #   template: vulnbox/bot.yml
@@ -21,11 +24,11 @@ scorebot:
 tick_rate: 0.5s
 duration: 30s
 timeline:
-  - at: 5s
-    event: network/open/bots
-  - at: 10s
-    event: bot/vuln1
-  - at: 15s
-    event: network/open
-  - at: 25s
-    event: scoreboard/freeze
+  # - at: 5s
+  #   event: network/open/bots
+  # - at: 10s
+  #   event: bot/vuln1
+  # - at: 15s
+  #   event: network/open
+  # - at: 25s
+  #   event: scoreboard/freeze

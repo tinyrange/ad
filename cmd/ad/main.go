@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -13,8 +14,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -57,14 +60,100 @@ type wireguardInstance struct {
 	peerConfig string
 }
 
+func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) error {
+	listen, err := w.wg.ListenTCPAddr(addr)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				slog.Error("failed to accept connection", "err", err)
+				continue
+			}
+
+			go cb(conn)
+		}
+	}()
+
+	return nil
+}
+
 // A wireguard router that generates wireguard configurations.
 type WireguardRouter struct {
+	mtx           sync.Mutex
 	publicAddress string
 	serverUrl     string
 	endpoints     map[string]*wireguardInstance
 }
 
+func (r *WireguardRouter) getInstance(instanceId string) (*wireguardInstance, error) {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	instance, ok := r.endpoints[instanceId]
+	if !ok {
+		return nil, fmt.Errorf("instance not found")
+	}
+
+	return instance, nil
+}
+
+func (r *WireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
+	instance, err := r.getInstance(instanceId)
+	if err != nil {
+		return err
+	}
+
+	return instance.addSimpleListener(addr, cb)
+}
+
+func (r *WireguardRouter) AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error {
+	sourceInstance, err := r.getInstance(source)
+	if err != nil {
+		return err
+	}
+
+	listen, err := sourceInstance.wg.ListenTCPAddr(sourceAddr)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for {
+			conn, err := listen.Accept()
+			if err != nil {
+				slog.Error("failed to accept connection", "err", err)
+				continue
+			}
+
+			go func() {
+				destInstance, err := r.getInstance(dest)
+				if err != nil {
+					slog.Error("failed to get dest instance", "err", err)
+					return
+				}
+
+				otherConn, err := destInstance.wg.Dial("tcp", destAddr)
+				if err != nil {
+					slog.Error("failed to dial", "err", err)
+					return
+				}
+
+				go common.Proxy(conn, otherConn, 4096)
+			}()
+		}
+	}()
+
+	return nil
+}
+
 func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
 	slog.Info("adding wireguard endpoint", "instance", instanceId)
 
 	wg, err := wireguard.NewServer("10.40.0.1")
@@ -103,11 +192,11 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 }
 
 func (r *WireguardRouter) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
-	slog.Info("dialing", "instance", instanceId, "network", network, "address", address)
+	// slog.Info("dialing", "instance", instanceId, "network", network, "address", address)
 
-	instance, ok := r.endpoints[instanceId]
-	if !ok {
-		return nil, fmt.Errorf("instance not found")
+	instance, err := r.getInstance(instanceId)
+	if err != nil {
+		return nil, err
 	}
 
 	return instance.wg.DialContext(ctx, network, address)
@@ -118,8 +207,8 @@ func (r *WireguardRouter) ServeConfig(w http.ResponseWriter, req *http.Request) 
 
 	slog.Debug("serving wireguard config", "instance", instanceId)
 
-	instance, ok := r.endpoints[instanceId]
-	if !ok {
+	instance, err := r.getInstance(instanceId)
+	if err != nil {
 		http.Error(w, "instance not found", http.StatusNotFound)
 		return
 	}
@@ -144,7 +233,7 @@ func (t *TinyRangeInstance) Dial(network, address string) (net.Conn, error) {
 
 func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string) error {
 	// Load the template.
-	template, ok := t.game.tinyRangeTemplates[templateName]
+	template, ok := t.game.getCachedTemplate(templateName)
 	if !ok {
 		return fmt.Errorf("template %s not found", templateName)
 	}
@@ -213,7 +302,7 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
 
-	slog.Info("running command", "instance", t.instanceId, "command", command)
+	// slog.Info("running command", "instance", t.instanceId, "command", command)
 
 	// Run the command.
 	out, err := session.CombinedOutput(command)
@@ -282,7 +371,24 @@ type ScoreBotConfig struct {
 	HealthCheck string `yaml:"health_check"`
 
 	instance *TinyRangeInstance
+	mtx      sync.Mutex
 	tpl      *template.Template
+}
+
+func (v *ScoreBotConfig) getTemplate() (*template.Template, error) {
+	v.mtx.Lock()
+	defer v.mtx.Unlock()
+
+	if v.tpl == nil {
+		tpl, err := template.New("command").Parse(v.Command)
+		if err != nil {
+			return nil, err
+		}
+
+		v.tpl = tpl
+	}
+
+	return v.tpl, nil
 }
 
 func (v *ScoreBotConfig) Stop() error {
@@ -324,36 +430,42 @@ func (v *ScoreBotConfig) Wait() error {
 	}
 }
 
-func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team, flag string) error {
-	if sb.tpl == nil {
-		tpl, err := template.New("command").Parse(sb.Command)
-		if err != nil {
-			return err
-		}
+type scoreBotResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
 
-		sb.tpl = tpl
+func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team, flag string) (bool, string, error) {
+	tpl, err := sb.getTemplate()
+	if err != nil {
+		return false, "", err
 	}
 
 	var buf strings.Builder
 
-	if err := sb.tpl.Execute(&buf, &struct {
+	if err := tpl.Execute(&buf, &struct {
 		TeamIP  string
 		NewFlag string
 	}{
 		TeamIP:  team.IP(),
 		NewFlag: flag,
 	}); err != nil {
-		return err
+		return false, "", err
 	}
 
 	resp, err := sb.instance.RunCommand(buf.String(), 5*time.Second)
 	if err != nil {
-		return err
+		// This is considered a internal error.
+		return false, "", err
 	}
 
-	slog.Info("scorebot response", "team", team.DisplayName, "resp", resp)
+	var response scoreBotResponse
 
-	return fmt.Errorf("not implemented")
+	if err := json.Unmarshal([]byte(resp), &response); err != nil {
+		return false, "", err
+	}
+
+	return response.Status == "success", response.Message, nil
 }
 
 type TimelineEvent struct {
@@ -395,6 +507,10 @@ type Team struct {
 
 	teamInstance *TinyRangeInstance
 	botInstance  *TinyRangeInstance
+}
+
+func (t *Team) InstanceId() string {
+	return t.teamInstance.instanceId
 }
 
 func (t *Team) IP() string {
@@ -456,7 +572,24 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	}
 	t.teamInstance = inst
 
+	// Connect the team machine to itself.
+	if err := game.Router.AddSimpleForwarder(
+		t.InstanceId(), fmt.Sprintf("%s:5000", t.IP()),
+		t.InstanceId(), "10.42.0.2:5000",
+	); err != nil {
+		return err
+	}
+
+	// Run the init command.
 	if err := t.runInitCommand(game); err != nil {
+		return err
+	}
+
+	// Connect the scoring machine to the team.
+	if err := game.Router.AddSimpleForwarder(
+		game.ScoreBotInstance(), fmt.Sprintf("%s:5000", t.IP()),
+		t.InstanceId(), "10.42.0.2:5000",
+	); err != nil {
 		return err
 	}
 
@@ -500,6 +633,7 @@ type AttackDefenseGame struct {
 	// Router is the wireguard router for the game.
 	Router *WireguardRouter
 
+	templateMutex sync.Mutex
 	// TinyRangeTemplates is a map of tinyrange templates that are already cached.
 	// It points to the VM config filename.
 	tinyRangeTemplates map[string]string
@@ -511,6 +645,14 @@ type AttackDefenseGame struct {
 	SshServerHostKey string
 
 	server *http.Server
+}
+
+func (game *AttackDefenseGame) ScoreBotInstance() string {
+	if game.Config.ScoreBot.instance == nil {
+		return ""
+	}
+
+	return game.Config.ScoreBot.instance.instanceId
 }
 
 func (game *AttackDefenseGame) ResolvePath(path string) string {
@@ -546,7 +688,32 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 		last = lines[len(lines)-2]
 	}
 
+	game.templateMutex.Lock()
+	defer game.templateMutex.Unlock()
+
 	game.tinyRangeTemplates[templateFilename] = last
+
+	return nil
+}
+
+func (game *AttackDefenseGame) getCachedTemplate(templateFilename string) (string, bool) {
+	game.templateMutex.Lock()
+	defer game.templateMutex.Unlock()
+
+	filename, ok := game.tinyRangeTemplates[templateFilename]
+	if !ok {
+		return "", false
+	}
+
+	return filename, true
+}
+
+func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) error {
+	if _, ok := game.getCachedTemplate(templateFilename); !ok {
+		if err := game.cacheTinyRangeTemplate(templateFilename); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -574,10 +741,8 @@ func (game *AttackDefenseGame) generateWireguardConfig() (string, string, error)
 
 func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFilename string) (*TinyRangeInstance, error) {
 	// Check if the template is already cached.
-	if _, ok := game.tinyRangeTemplates[templateFilename]; !ok {
-		if err := game.cacheTinyRangeTemplate(templateFilename); err != nil {
-			return nil, err
-		}
+	if err := game.ensureTemplateCached(templateFilename); err != nil {
+		return nil, err
 	}
 
 	// Generate the wireguard config URL.
@@ -628,16 +793,24 @@ func (game *AttackDefenseGame) AddEvent(name string, run EventCallback) {
 
 // ForAllTeams runs the given function for each team in the game.
 func (game *AttackDefenseGame) ForAllTeams(f func(t *Team) error) error {
-	failed := false
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(game.Teams))
 
-	for name, team := range game.Teams {
-		if err := f(team); err != nil {
-			slog.Error("failed to run function for team", "name", name, "err", err)
-			failed = true
-		}
+	for _, team := range game.Teams {
+		wg.Add(1)
+		go func(team *Team) {
+			defer wg.Done()
+			if err := f(team); err != nil {
+				slog.Error("failed to run function for team", "team id", team.ID, "err", err)
+				errChan <- err
+			}
+		}(team)
 	}
 
-	if failed {
+	wg.Wait()
+	close(errChan)
+
+	if len(errChan) > 0 {
 		return fmt.Errorf("failed to run function for all teams")
 	}
 
@@ -651,9 +824,18 @@ func (game *AttackDefenseGame) Tick() error {
 	// Send the scorebot command to each team.
 	// TODO(joshua): Delay this randomly during the tick interval.
 	if err := game.ForAllTeams(func(t *Team) error {
+		start := time.Now()
+
 		newFlag := game.FlagGen.Generate(int(game.CurrentTick), t.ID, 0, game.Signer)
 
-		return game.Config.ScoreBot.Run(game, t, newFlag)
+		success, message, err := game.Config.ScoreBot.Run(game, t, newFlag)
+		if err != nil {
+			return err
+		}
+
+		slog.Info("scorebot response", "team", t.DisplayName, "success", success, "message", message, "duration", time.Since(start))
+
+		return nil
 	}); err != nil {
 		slog.Error("failed to run scorebot for each team", "err", err)
 	}
@@ -907,17 +1089,44 @@ outer:
 	return nil
 }
 
+type arrayFlags []string
+
+// String is an implementation of the flag.Value interface
+func (i *arrayFlags) String() string {
+	return fmt.Sprintf("%v", *i)
+}
+
+// Set is an implementation of the flag.Value interface
+func (i *arrayFlags) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
 var (
 	configFile       = flag.String("config", "", "The config file to start the Attack/Defense server with.")
-	debugTeam        = flag.String("debug-team", "", "Create a team for debugging.")
+	debugTeam        arrayFlags
 	tinyrangePath    = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
 	verbose          = flag.Bool("verbose", false, "Enable verbose logging.")
 	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
 	sshServerHostKey = flag.String("ssh-server-host-key", "", "The SSH server host key.")
+	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
 )
 
 func appMain() error {
+	flag.Var(&debugTeam, "debug-team", "Create a team for debugging.")
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			return err
+		}
+
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return err
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	if *verbose {
 		slog.SetLogLoggerLevel(slog.LevelDebug)
@@ -957,8 +1166,8 @@ func appMain() error {
 		SshServerHostKey:   *sshServerHostKey,
 	}
 
-	if *debugTeam != "" {
-		game.AddTeam(*debugTeam)
+	for _, team := range debugTeam {
+		game.AddTeam(team)
 	}
 
 	if err := game.Run(); err != nil {
