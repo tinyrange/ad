@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +32,8 @@ import (
 
 const CURRENT_CONFIG_VERSION = 1
 
+const BOT_ID_OFFSET = 0xffff
+
 const (
 	HOST_IP = "10.40.0.1"
 	VM_IP   = "10.42.0.2"
@@ -52,13 +55,13 @@ var (
 	CONTEXT_KEY_TEAM = CONTEXT_KEY("team")
 )
 
-func GetTeam(ctx context.Context) *Team {
-	t, ok := ctx.Value(CONTEXT_KEY_TEAM).(*Team)
+func GetInfo(ctx context.Context) *TargetInfo {
+	t, ok := ctx.Value(CONTEXT_KEY_TEAM).(TargetInfo)
 	if !ok {
 		return nil
 	}
 
-	return t
+	return &t
 }
 
 type Duration struct {
@@ -482,7 +485,7 @@ type scoreBotResponse struct {
 	Message string `json:"message"`
 }
 
-func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team, flag string) (bool, string, error) {
+func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
 	tpl, err := sb.getTemplate()
 	if err != nil {
 		return false, "", err
@@ -494,7 +497,7 @@ func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, team *Team, flag string) 
 		TeamIP  string
 		NewFlag string
 	}{
-		TeamIP:  team.IP(),
+		TeamIP:  info.IP,
 		NewFlag: flag,
 	}); err != nil {
 		return false, "", err
@@ -549,6 +552,14 @@ type Event struct {
 	Run EventCallback
 }
 
+type TargetInfo struct {
+	ID         int
+	Name       string
+	IP         string
+	InstanceId string
+	IsBot      bool
+}
+
 type Team struct {
 	ID          int
 	DisplayName string
@@ -557,18 +568,56 @@ type Team struct {
 	botInstance  *TinyRangeInstance
 }
 
-func (t *Team) submitFlag(tickId int, teamId int, serviceId int) error {
-	slog.Info("submitting flag", "team", t.DisplayName, "tick", tickId, "otherTeam", teamId, "service", serviceId)
+func (t *Team) Info() TargetInfo {
+	return TargetInfo{
+		ID:         t.ID,
+		Name:       t.DisplayName,
+		IP:         t.IP(),
+		InstanceId: t.InstanceId(),
+		IsBot:      false,
+	}
+}
+
+func (t *Team) BotInfo() TargetInfo {
+	return TargetInfo{
+		ID:         BOT_ID_OFFSET + t.ID,
+		Name:       t.DisplayName + "_bot",
+		IP:         t.BotIP(),
+		InstanceId: t.BotInstanceId(),
+		IsBot:      true,
+	}
+}
+
+func (t *Team) submitFlag(bot bool, tickId int, teamId int, serviceId int) error {
+	if bot {
+		slog.Info("submitting flag", "team", t.DisplayName+"_bot", "tick", tickId, "otherTeam", teamId, "service", serviceId)
+	} else {
+		slog.Info("submitting flag", "team", t.DisplayName, "tick", tickId, "otherTeam", teamId, "service", serviceId)
+	}
 
 	return nil
 }
 
 func (t *Team) InstanceId() string {
+	if t.teamInstance == nil {
+		return ""
+	}
 	return t.teamInstance.instanceId
 }
 
+func (t *Team) BotInstanceId() string {
+	if t.botInstance == nil {
+		return ""
+	}
+	return t.botInstance.instanceId
+}
+
 func (t *Team) IP() string {
-	return net.IPv4(10, 42, 0, 10+byte(t.ID)).String()
+	return net.IPv4(10, 42, 10, 10+byte(t.ID)).String()
+}
+
+func (t *Team) BotIP() string {
+	return net.IPv4(10, 42, 20, 10+byte(t.ID)).String()
 }
 
 func (t *Team) Stop() error {
@@ -587,7 +636,36 @@ func (t *Team) Stop() error {
 	return nil
 }
 
-func (t *Team) runInitCommand(game *AttackDefenseGame) error {
+func (t *Team) runBotCommand(game *AttackDefenseGame, teamInfo TargetInfo, botInfo TargetInfo, command string) error {
+	commandTpl, err := template.New("command").Parse(command)
+	if err != nil {
+		return err
+	}
+
+	var buf strings.Builder
+
+	if err := commandTpl.Execute(&buf, &struct {
+		TeamIP      string
+		TickSeconds float64
+	}{
+		TeamIP:      teamInfo.IP,
+		TickSeconds: game.scaleDuration(game.Config.TickRate.Duration).Seconds(),
+	}); err != nil {
+		return err
+	}
+
+	// Run the command.
+	resp, err := t.botInstance.RunCommand(buf.String(), 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to run bot command(%w): %s", err, resp)
+	}
+
+	slog.Info("bot command response", "team", botInfo.Name, "response", resp)
+
+	return nil
+}
+
+func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error {
 	initTpl, err := template.New("init").Parse(game.Config.Vulnbox.InitTemplate)
 	if err != nil {
 		return err
@@ -599,14 +677,20 @@ func (t *Team) runInitCommand(game *AttackDefenseGame) error {
 		TeamIP   string
 		TeamName string
 	}{
-		TeamIP:   t.IP(),
-		TeamName: t.DisplayName,
+		TeamIP:   target.IP,
+		TeamName: target.Name,
 	}); err != nil {
 		return err
 	}
 
 	// Run the init command.
-	resp, err := t.teamInstance.RunCommand(buf.String(), 10*time.Second)
+	var resp string
+
+	if !target.IsBot {
+		resp, err = t.teamInstance.RunCommand(buf.String(), 10*time.Second)
+	} else {
+		resp, err = t.botInstance.RunCommand(buf.String(), 10*time.Second)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to run init command(%w): %s", err, resp)
 	}
@@ -626,64 +710,9 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	}
 	t.teamInstance = inst
 
-	for _, service := range game.Config.Vulnbox.Services {
-		// Connect the team machine to itself.
-		if err := game.Router.AddSimpleForwarder(
-			t.InstanceId(), ipPort(t.IP(), service.Port),
-			t.InstanceId(), ipPort(VM_IP, service.Port),
-		); err != nil {
-			return err
-		}
-	}
-
-	// Run the init command.
-	if err := t.runInitCommand(game); err != nil {
+	if err := game.registerFlowsForTeam(t, t.Info()); err != nil {
 		return err
 	}
-
-	slog.Info("team started", "team", t.DisplayName, "ip", t.IP(), "instance", t.InstanceId())
-
-	for _, service := range game.Config.Vulnbox.Services {
-		// Connect the scoring machine to the team.
-		if err := game.Router.AddSimpleForwarder(
-			game.ScoreBotInstance(), ipPort(t.IP(), service.Port),
-			t.InstanceId(), ipPort(VM_IP, service.Port),
-		); err != nil {
-			return err
-		}
-	}
-
-	// Connect the flag submission API to the team.
-	if err := game.Router.AddSimpleListener(t.InstanceId(), FLAG_SUBMISSION_IP_PORT, func(conn net.Conn) {
-		// read each line from the connection
-		scanner := bufio.NewScanner(conn)
-		for scanner.Scan() {
-			flag := scanner.Text()
-
-			status := game.submitFlag(t, flag)
-
-			slog.Info("received flag", "team", t.DisplayName, "flag", flag, "status", status)
-
-			fmt.Fprintf(conn, "%s\n", status)
-		}
-	}); err != nil {
-		return err
-	}
-
-	internalWeb, err := game.Router.AddListener(t.InstanceId(), INTERNAL_WEB_IP_PORT)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Add the team to the context for r.
-			ctx := context.WithValue(r.Context(), CONTEXT_KEY_TEAM, t)
-
-			// Serve the request.
-			game.internalServer.ServeHTTP(w, r.WithContext(ctx))
-		}))
-	}()
 
 	// If there is a bot, start the bot instance.
 	if game.Config.Bots.Enabled {
@@ -692,6 +721,30 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 			return err
 		}
 		t.botInstance = inst
+
+		if err := game.registerFlowsForTeam(t, t.BotInfo()); err != nil {
+			return err
+		}
+
+		// Open the bot to the team.
+		for _, service := range game.Config.Vulnbox.Services {
+			if err := game.Router.AddSimpleForwarder(
+				t.InstanceId(), ipPort(t.BotIP(), service.Port),
+				t.BotInstanceId(), ipPort(VM_IP, service.Port),
+			); err != nil {
+				return err
+			}
+		}
+
+		// Open the team to the bot.
+		for _, service := range game.Config.Vulnbox.Services {
+			if err := game.Router.AddSimpleForwarder(
+				t.BotInstanceId(), ipPort(t.IP(), service.Port),
+				t.InstanceId(), ipPort(VM_IP, service.Port),
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -741,6 +794,8 @@ type AttackDefenseGame struct {
 
 	publicServer   *http.Server
 	internalServer *http.ServeMux
+
+	rebuildTemplates bool
 }
 
 func (game *AttackDefenseGame) ScoreBotInstance() string {
@@ -759,33 +814,122 @@ func (game *AttackDefenseGame) scaleDuration(dur time.Duration) time.Duration {
 	return time.Duration(float64(dur.Nanoseconds()) * game.TimeScale)
 }
 
-func (game *AttackDefenseGame) submitFlag(team *Team, flag string) string {
-	tickId, teamId, serviceId, ok := game.FlagGen.Verify(game.Signer.Public(), flag)
-	if !ok {
-		return "INVALID_FLAG"
+func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) error {
+	for _, service := range game.Config.Vulnbox.Services {
+		// Connect the team machine to itself.
+		if err := game.Router.AddSimpleForwarder(
+			info.InstanceId, ipPort(info.IP, service.Port),
+			info.InstanceId, ipPort(VM_IP, service.Port),
+		); err != nil {
+			return err
+		}
 	}
 
-	if teamId == team.ID {
-		return "FLAG_FROM_OWN_TEAM"
+	// Run the init command.
+	if err := t.runInitCommand(game, info); err != nil {
+		return err
+	}
+
+	for _, service := range game.Config.Vulnbox.Services {
+		// Connect the scoring machine to the team.
+		if err := game.Router.AddSimpleForwarder(
+			game.ScoreBotInstance(), ipPort(info.IP, service.Port),
+			info.InstanceId, ipPort(VM_IP, service.Port),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Connect the flag submission API to the team.
+	if err := game.Router.AddSimpleListener(info.InstanceId, FLAG_SUBMISSION_IP_PORT, func(conn net.Conn) {
+		// read each line from the connection
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			flag := scanner.Text()
+
+			status := game.submitFlag(info, flag)
+
+			if status != FlagAccepted {
+				slog.Info("received invalid flag", "team", info.Name, "flag", flag, "status", status)
+			}
+
+			fmt.Fprintf(conn, "%s\n", status)
+		}
+	}); err != nil {
+		return err
+	}
+
+	internalWeb, err := game.Router.AddListener(info.InstanceId, INTERNAL_WEB_IP_PORT)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Add the team to the context for r.
+			ctx := context.WithValue(r.Context(), CONTEXT_KEY_TEAM, info)
+
+			// Serve the request.
+			game.internalServer.ServeHTTP(w, r.WithContext(ctx))
+		}))
+	}()
+
+	return nil
+}
+
+func (game *AttackDefenseGame) getTeam(id int) (*Team, error) {
+	if id < 0 || id >= len(game.Teams) {
+		return nil, fmt.Errorf("team not found")
+	}
+
+	return game.Teams[id], nil
+}
+
+type FlagStatus string
+
+const (
+	FlagAccepted    FlagStatus = "FLAG_ACCEPTED"
+	FlagRejected    FlagStatus = "FLAG_REJECTED"
+	FlagExpired     FlagStatus = "FLAG_EXPIRED"
+	FlagNotYetValid FlagStatus = "FLAG_NOT_YET_VALID"
+	FlagFromOwnTeam FlagStatus = "FLAG_FROM_OWN_TEAM"
+	InvalidFlag     FlagStatus = "INVALID_FLAG"
+	InvalidService  FlagStatus = "INVALID_SERVICE"
+	InvalidTeam     FlagStatus = "INVALID_TEAM"
+)
+
+func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
+	tickId, teamId, serviceId, ok := game.FlagGen.Verify(game.Signer.Public(), flag)
+	if !ok {
+		return InvalidFlag
+	}
+
+	if teamId == info.ID {
+		return FlagFromOwnTeam
 	}
 
 	if serviceId < 0 || serviceId >= len(game.Config.Vulnbox.Services) {
-		return "INVALID_SERVICE"
+		return InvalidService
 	}
 
 	if int64(tickId) < game.CurrentTick-game.FlagValidTicks() {
-		return "FLAG_EXPIRED"
+		return FlagExpired
 	}
 
 	if int64(tickId) > game.CurrentTick {
-		return "FLAG_NOT_YET_VALID"
+		return FlagNotYetValid
 	}
 
-	if err := team.submitFlag(tickId, teamId, serviceId); err != nil {
-		return "FLAG_REJECTED"
+	team, err := game.getTeam(teamId)
+	if err != nil {
+		return InvalidTeam
 	}
 
-	return "FLAG_ACCEPTED"
+	if err := team.submitFlag(info.IsBot, tickId, teamId, serviceId); err != nil {
+		return FlagRejected
+	}
+
+	return FlagAccepted
 }
 
 func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) error {
@@ -794,13 +938,22 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 
 	resolvedFilename := game.ResolvePath(templateFilename)
 
-	// Run `tinyrange login --template --load-config <templateFilename>` to cache the template.
-	cmd := exec.Command(game.Config.TinyRange.Path, "login",
+	args := []string{
+		game.Config.TinyRange.Path, "login",
 		"--template",
-		"--load-config", filepath.Base(resolvedFilename),
-	)
+		"--load-config", resolvedFilename,
+	}
 
-	cmd.Dir = filepath.Dir(resolvedFilename)
+	if *verbose {
+		args = append(args, "--verbose")
+	}
+
+	if game.rebuildTemplates {
+		args = append(args, "--rebuild")
+	}
+
+	// Run `tinyrange login --template --load-config <templateFilename>` to cache the template.
+	cmd := exec.Command(args[0], args[1:]...)
 
 	cmd.Stderr = os.Stderr
 
@@ -925,7 +1078,7 @@ func (game *AttackDefenseGame) AddEvent(name string, run EventCallback) {
 }
 
 // ForAllTeams runs the given function for each team in the game.
-func (game *AttackDefenseGame) ForAllTeams(f func(t *Team) error) error {
+func (game *AttackDefenseGame) ForAllTeams(includeBots bool, f func(t *Team, info TargetInfo) error) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(game.Teams))
 
@@ -933,11 +1086,23 @@ func (game *AttackDefenseGame) ForAllTeams(f func(t *Team) error) error {
 		wg.Add(1)
 		go func(team *Team) {
 			defer wg.Done()
-			if err := f(team); err != nil {
+			if err := f(team, team.Info()); err != nil {
 				slog.Error("failed to run function for team", "team id", team.ID, "err", err)
 				errChan <- err
 			}
 		}(team)
+
+		if includeBots && game.Config.Bots.Enabled {
+			wg.Add(1)
+
+			go func(team *Team) {
+				defer wg.Done()
+				if err := f(team, team.BotInfo()); err != nil {
+					slog.Error("failed to run function for bot", "team id", team.ID, "err", err)
+					errChan <- err
+				}
+			}(team)
+		}
 	}
 
 	wg.Wait()
@@ -954,21 +1119,29 @@ func (game *AttackDefenseGame) Tick() error {
 	// Increment the current tick.
 	game.CurrentTick += 1
 
+	slog.Info("tick", "num", game.CurrentTick)
+
 	start := time.Now()
 
 	// Send the scorebot command to each team.
-	// TODO(joshua): Delay this randomly during the tick interval.
-	if err := game.ForAllTeams(func(t *Team) error {
+	if err := game.ForAllTeams(true, func(t *Team, info TargetInfo) error {
 		start := time.Now()
 
-		newFlag := game.FlagGen.Generate(int(game.CurrentTick), t.ID, 0, game.Signer)
+		// Delay this randomly during the tick interval.
+		totalTickTime := game.scaleDuration(game.Config.TickRate.Duration)
 
-		success, message, err := game.Config.ScoreBot.Run(game, t, newFlag)
+		delay := time.Duration(rand.Intn(int(totalTickTime.Milliseconds())/2)) * time.Millisecond
+
+		time.Sleep(delay)
+
+		newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, 0, game.Signer)
+
+		success, message, err := game.Config.ScoreBot.Run(game, info, newFlag)
 		if err != nil {
 			return err
 		}
 
-		slog.Info("scorebot response", "team", t.DisplayName, "success", success, "message", message, "duration", time.Since(start))
+		slog.Info("scorebot response", "team", info.Name, "success", success, "message", message, "duration", time.Since(start))
 
 		return nil
 	}); err != nil {
@@ -1040,8 +1213,8 @@ func (game *AttackDefenseGame) registerInternalServer() error {
 
 	// Add a API endpoint for submitting flags.
 	game.internalServer.HandleFunc("POST /api/flag", func(w http.ResponseWriter, r *http.Request) {
-		team := GetTeam(r.Context())
-		if team == nil {
+		info := GetInfo(r.Context())
+		if info == nil {
 			http.Error(w, "team not found", http.StatusNotFound)
 			return
 		}
@@ -1053,16 +1226,18 @@ func (game *AttackDefenseGame) registerInternalServer() error {
 			return
 		}
 
-		status := game.submitFlag(team, flag)
+		status := game.submitFlag(*info, flag)
 
-		slog.Info("received flag", "team", team.DisplayName, "flag", flag, "status", status)
+		if status != FlagAccepted {
+			slog.Info("received invalid flag", "team", info.Name, "flag", flag, "status", status)
+		}
 
 		fmt.Fprintf(w, "%s\n", status)
 	})
 
 	// Add an API endpoint for getting a list of team IPs.
 	game.internalServer.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
-		playerTeam := GetTeam(r.Context())
+		playerTeam := GetInfo(r.Context())
 		if playerTeam == nil {
 			http.Error(w, "team not found", http.StatusNotFound)
 			return
@@ -1239,6 +1414,17 @@ func (game *AttackDefenseGame) Run() error {
 		}
 	}
 
+	// Register events for the game.
+	if game.Config.Bots.Enabled {
+		for name, ev := range game.Config.Bots.Events {
+			game.AddEvent(fmt.Sprintf("bot/%s", name), func(game *AttackDefenseGame) error {
+				return game.ForAllTeams(false, func(t *Team, info TargetInfo) error {
+					return t.runBotCommand(game, t.Info(), t.BotInfo(), ev.Command)
+				})
+			})
+		}
+	}
+
 	// Log the start of the game.
 	slog.Info("game starting", "completes", time.Now().Add(game.scaleDuration(game.Config.Duration.Duration)), "totalTicks", game.TotalTicks())
 
@@ -1259,7 +1445,7 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Initialize all initial teams.
-	if err := game.ForAllTeams(func(t *Team) error {
+	if err := game.ForAllTeams(false, func(t *Team, info TargetInfo) error {
 		return t.Start(game)
 	}); err != nil {
 		return fmt.Errorf("failed to start all teams: %w", err)
@@ -1275,8 +1461,6 @@ outer:
 	for {
 		select {
 		case <-game.Ticker.C:
-			slog.Info("tick", "num", game.CurrentTick)
-
 			if err := game.Tick(); err != nil {
 				slog.Error("failed to tick", "err", err)
 			}
@@ -1312,6 +1496,7 @@ var (
 	sshServerHostKey = flag.String("ssh-server-host-key", "", "The SSH server host key.")
 	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
 	timeScale        = flag.Float64("timescale", 1.0, "The time scale to run the game at.")
+	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 )
 
 func appMain() error {
@@ -1367,6 +1552,7 @@ func appMain() error {
 		SshServer:          *sshServer,
 		SshServerHostKey:   *sshServerHostKey,
 		TimeScale:          *timeScale,
+		rebuildTemplates:   *rebuild,
 	}
 
 	for _, team := range debugTeam {
