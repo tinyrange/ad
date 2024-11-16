@@ -5,3 +5,5 @@ files:
 packages:
     - python3
     - py3-requests
+min_spec:
+    cpu: 2

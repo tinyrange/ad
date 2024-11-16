@@ -21,8 +21,14 @@ scorebot:
   config_file: game.json
   command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
   health_check: python3 /root/scoring.py health
-tick_rate: 0.5s
-duration: 30s
+
+# Flags are valid for 1 second.
+flag_valid_time: 1s
+
+# The game will run for 5 seconds with 40 ticks.
+tick_rate: 0.25s
+duration: 5s
+
 timeline:
   # - at: 5s
   #   event: network/open/bots

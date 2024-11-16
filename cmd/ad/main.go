@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -29,6 +30,36 @@ import (
 )
 
 const CURRENT_CONFIG_VERSION = 1
+
+const (
+	HOST_IP = "10.40.0.1"
+	VM_IP   = "10.42.0.2"
+)
+
+func ipPort(ip string, port int) string {
+	return fmt.Sprintf("%s:%d", ip, port)
+}
+
+var (
+	INTERNAL_WEB_IP_PORT    = ipPort(HOST_IP, 80)
+	FLAG_SUBMISSION_IP_PORT = ipPort(HOST_IP, 5000)
+	VM_SSH_IP_PORT          = ipPort(VM_IP, 2222)
+)
+
+type CONTEXT_KEY string
+
+var (
+	CONTEXT_KEY_TEAM = CONTEXT_KEY("team")
+)
+
+func GetTeam(ctx context.Context) *Team {
+	t, ok := ctx.Value(CONTEXT_KEY_TEAM).(*Team)
+	if !ok {
+		return nil
+	}
+
+	return t
+}
 
 type Duration struct {
 	time.Duration
@@ -101,6 +132,15 @@ func (r *WireguardRouter) getInstance(instanceId string) (*wireguardInstance, er
 	return instance, nil
 }
 
+func (r *WireguardRouter) AddListener(instanceId, addr string) (net.Listener, error) {
+	instance, err := r.getInstance(instanceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return instance.wg.ListenTCPAddr(addr)
+}
+
 func (r *WireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
 	instance, err := r.getInstance(instanceId)
 	if err != nil {
@@ -156,7 +196,7 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 
 	slog.Info("adding wireguard endpoint", "instance", instanceId)
 
-	wg, err := wireguard.NewServer("10.40.0.1")
+	wg, err := wireguard.NewServer(HOST_IP)
 	if err != nil {
 		return "", err
 	}
@@ -273,8 +313,10 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// slog.Info("running command", "instance", t.instanceId, "command", command)
+
 	// Use game.Dial to connect to the instance.
-	conn, err := t.game.DialContext(ctx, t.instanceId, "tcp", "10.42.0.2:2222")
+	conn, err := t.game.DialContext(ctx, t.instanceId, "tcp", VM_SSH_IP_PORT)
 	if err != nil {
 		return "", fmt.Errorf("failed to dial instance: %w", err)
 	}
@@ -282,7 +324,7 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 
 	// The instance is listening on SSH on port 2222.
 	// Use the hardcoded password "insecurepassword" to login.
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, "10.42.0.2:2222", &ssh.ClientConfig{
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, VM_SSH_IP_PORT, &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
 			ssh.Password("insecurepassword"),
@@ -302,13 +344,13 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
 
-	// slog.Info("running command", "instance", t.instanceId, "command", command)
-
 	// Run the command.
 	out, err := session.CombinedOutput(command)
 	if err != nil && err != io.EOF {
 		return string(out), fmt.Errorf("failed to run command: %w", err)
 	}
+
+	// slog.Info("command output", "instance", t.instanceId, "output", string(out))
 
 	return string(out), nil
 }
@@ -344,9 +386,14 @@ func (f *FrontendConfig) Url() string {
 	return fmt.Sprintf("http://%s:%d", f.Address, f.Port)
 }
 
+type ServiceConfig struct {
+	Port int `yaml:"port"`
+}
+
 type VulnboxConfig struct {
-	Template     string `yaml:"template"`
-	InitTemplate string `yaml:"init"`
+	Template     string                   `yaml:"template"`
+	InitTemplate string                   `yaml:"init"`
+	Services     map[string]ServiceConfig `yaml:"services"`
 }
 
 type EventDefinition struct {
@@ -484,15 +531,16 @@ func (tl *TimelineEvent) Run(game *AttackDefenseGame) error {
 type Config struct {
 	basePath string
 
-	Version   int             `yaml:"version"`
-	TinyRange TinyRangeConfig `yaml:"tinyrange"`
-	Frontend  FrontendConfig  `yaml:"frontend"`
-	Vulnbox   VulnboxConfig   `yaml:"vulnbox"`
-	Bots      BotConfig       `yaml:"bots"`
-	ScoreBot  ScoreBotConfig  `yaml:"scorebot"`
-	TickRate  Duration        `yaml:"tick_rate"`
-	Duration  Duration        `yaml:"duration"`
-	Timeline  []TimelineEvent `yaml:"timeline"`
+	Version       int             `yaml:"version"`
+	TinyRange     TinyRangeConfig `yaml:"tinyrange"`
+	Frontend      FrontendConfig  `yaml:"frontend"`
+	Vulnbox       VulnboxConfig   `yaml:"vulnbox"`
+	Bots          BotConfig       `yaml:"bots"`
+	ScoreBot      ScoreBotConfig  `yaml:"scorebot"`
+	TickRate      Duration        `yaml:"tick_rate"`
+	Duration      Duration        `yaml:"duration"`
+	FlagValidTime Duration        `yaml:"flag_valid_time"`
+	Timeline      []TimelineEvent `yaml:"timeline"`
 }
 
 type EventCallback func(game *AttackDefenseGame) error
@@ -507,6 +555,12 @@ type Team struct {
 
 	teamInstance *TinyRangeInstance
 	botInstance  *TinyRangeInstance
+}
+
+func (t *Team) submitFlag(tickId int, teamId int, serviceId int) error {
+	slog.Info("submitting flag", "team", t.DisplayName, "tick", tickId, "otherTeam", teamId, "service", serviceId)
+
+	return nil
 }
 
 func (t *Team) InstanceId() string {
@@ -572,12 +626,14 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	}
 	t.teamInstance = inst
 
-	// Connect the team machine to itself.
-	if err := game.Router.AddSimpleForwarder(
-		t.InstanceId(), fmt.Sprintf("%s:5000", t.IP()),
-		t.InstanceId(), "10.42.0.2:5000",
-	); err != nil {
-		return err
+	for _, service := range game.Config.Vulnbox.Services {
+		// Connect the team machine to itself.
+		if err := game.Router.AddSimpleForwarder(
+			t.InstanceId(), ipPort(t.IP(), service.Port),
+			t.InstanceId(), ipPort(VM_IP, service.Port),
+		); err != nil {
+			return err
+		}
 	}
 
 	// Run the init command.
@@ -585,13 +641,49 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		return err
 	}
 
-	// Connect the scoring machine to the team.
-	if err := game.Router.AddSimpleForwarder(
-		game.ScoreBotInstance(), fmt.Sprintf("%s:5000", t.IP()),
-		t.InstanceId(), "10.42.0.2:5000",
-	); err != nil {
+	slog.Info("team started", "team", t.DisplayName, "ip", t.IP(), "instance", t.InstanceId())
+
+	for _, service := range game.Config.Vulnbox.Services {
+		// Connect the scoring machine to the team.
+		if err := game.Router.AddSimpleForwarder(
+			game.ScoreBotInstance(), ipPort(t.IP(), service.Port),
+			t.InstanceId(), ipPort(VM_IP, service.Port),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Connect the flag submission API to the team.
+	if err := game.Router.AddSimpleListener(t.InstanceId(), FLAG_SUBMISSION_IP_PORT, func(conn net.Conn) {
+		// read each line from the connection
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			flag := scanner.Text()
+
+			status := game.submitFlag(t, flag)
+
+			slog.Info("received flag", "team", t.DisplayName, "flag", flag, "status", status)
+
+			fmt.Fprintf(conn, "%s\n", status)
+		}
+	}); err != nil {
 		return err
 	}
+
+	internalWeb, err := game.Router.AddListener(t.InstanceId(), INTERNAL_WEB_IP_PORT)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Add the team to the context for r.
+			ctx := context.WithValue(r.Context(), CONTEXT_KEY_TEAM, t)
+
+			// Serve the request.
+			game.internalServer.ServeHTTP(w, r.WithContext(ctx))
+		}))
+	}()
 
 	// If there is a bot, start the bot instance.
 	if game.Config.Bots.Enabled {
@@ -644,7 +736,11 @@ type AttackDefenseGame struct {
 	// SshServerHostKey is the host key for the SSH server.
 	SshServerHostKey string
 
-	server *http.Server
+	// TimeScale is the time scale to run the game at.
+	TimeScale float64
+
+	publicServer   *http.Server
+	internalServer *http.ServeMux
 }
 
 func (game *AttackDefenseGame) ScoreBotInstance() string {
@@ -659,7 +755,43 @@ func (game *AttackDefenseGame) ResolvePath(path string) string {
 	return filepath.Join(game.Config.basePath, path)
 }
 
+func (game *AttackDefenseGame) scaleDuration(dur time.Duration) time.Duration {
+	return time.Duration(float64(dur.Nanoseconds()) * game.TimeScale)
+}
+
+func (game *AttackDefenseGame) submitFlag(team *Team, flag string) string {
+	tickId, teamId, serviceId, ok := game.FlagGen.Verify(game.Signer.Public(), flag)
+	if !ok {
+		return "INVALID_FLAG"
+	}
+
+	if teamId == team.ID {
+		return "FLAG_FROM_OWN_TEAM"
+	}
+
+	if serviceId < 0 || serviceId >= len(game.Config.Vulnbox.Services) {
+		return "INVALID_SERVICE"
+	}
+
+	if int64(tickId) < game.CurrentTick-game.FlagValidTicks() {
+		return "FLAG_EXPIRED"
+	}
+
+	if int64(tickId) > game.CurrentTick {
+		return "FLAG_NOT_YET_VALID"
+	}
+
+	if err := team.submitFlag(tickId, teamId, serviceId); err != nil {
+		return "FLAG_REJECTED"
+	}
+
+	return "FLAG_ACCEPTED"
+}
+
 func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) error {
+	game.templateMutex.Lock()
+	defer game.templateMutex.Unlock()
+
 	resolvedFilename := game.ResolvePath(templateFilename)
 
 	// Run `tinyrange login --template --load-config <templateFilename>` to cache the template.
@@ -687,9 +819,6 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 	if last == "" {
 		last = lines[len(lines)-2]
 	}
-
-	game.templateMutex.Lock()
-	defer game.templateMutex.Unlock()
 
 	game.tinyRangeTemplates[templateFilename] = last
 
@@ -780,6 +909,10 @@ func (game *AttackDefenseGame) TotalTicks() int64 {
 	return game.Config.Duration.Nanoseconds() / game.Config.TickRate.Nanoseconds()
 }
 
+func (game *AttackDefenseGame) FlagValidTicks() int64 {
+	return game.Config.FlagValidTime.Nanoseconds() / game.Config.TickRate.Nanoseconds()
+}
+
 func (game *AttackDefenseGame) AddTeam(name string) {
 	game.Teams = append(game.Teams, &Team{
 		ID:          len(game.Teams),
@@ -821,6 +954,8 @@ func (game *AttackDefenseGame) Tick() error {
 	// Increment the current tick.
 	game.CurrentTick += 1
 
+	start := time.Now()
+
 	// Send the scorebot command to each team.
 	// TODO(joshua): Delay this randomly during the tick interval.
 	if err := game.ForAllTeams(func(t *Team) error {
@@ -849,6 +984,12 @@ func (game *AttackDefenseGame) Tick() error {
 		}
 	}
 
+	dur := time.Since(start)
+
+	if dur > game.Config.TickRate.Duration {
+		slog.Warn("tick took too long", "duration", dur)
+	}
+
 	return nil
 }
 
@@ -865,16 +1006,17 @@ func (game *AttackDefenseGame) GenerateKeys() error {
 	return nil
 }
 
-func (game *AttackDefenseGame) startServer() error {
+func (game *AttackDefenseGame) startFrontendServer() error {
 	handler := http.NewServeMux()
 
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Attack/Defense Game")
 	})
 
+	// Router is allowed to be public since it uses an API key to lookup a configuration.
 	game.Router.registerMux(handler)
 
-	game.server = &http.Server{
+	game.publicServer = &http.Server{
 		Addr:    game.Config.Frontend.Address,
 		Handler: handler,
 	}
@@ -885,10 +1027,58 @@ func (game *AttackDefenseGame) startServer() error {
 	}
 
 	go func() {
-		if err := game.server.Serve(listener); err != nil {
+		if err := game.publicServer.Serve(listener); err != nil {
 			slog.Error("failed to start server", "err", err)
 		}
 	}()
+
+	return nil
+}
+
+func (game *AttackDefenseGame) registerInternalServer() error {
+	game.internalServer = http.NewServeMux()
+
+	// Add a API endpoint for submitting flags.
+	game.internalServer.HandleFunc("POST /api/flag", func(w http.ResponseWriter, r *http.Request) {
+		team := GetTeam(r.Context())
+		if team == nil {
+			http.Error(w, "team not found", http.StatusNotFound)
+			return
+		}
+
+		flag := r.FormValue("flag")
+		if flag == "" {
+			http.Error(w, "flag not found", http.StatusBadRequest)
+
+			return
+		}
+
+		status := game.submitFlag(team, flag)
+
+		slog.Info("received flag", "team", team.DisplayName, "flag", flag, "status", status)
+
+		fmt.Fprintf(w, "%s\n", status)
+	})
+
+	// Add an API endpoint for getting a list of team IPs.
+	game.internalServer.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
+		teams := make([]struct {
+			IP          string `json:"ip"`
+			DisplayName string `json:"display_name"`
+		}, len(game.Teams))
+
+		for i, team := range game.Teams {
+			teams[i] = struct {
+				IP          string `json:"ip"`
+				DisplayName string `json:"display_name"`
+			}{
+				IP:          team.IP(),
+				DisplayName: team.DisplayName,
+			}
+		}
+
+		json.NewEncoder(w).Encode(teams)
+	})
 
 	return nil
 }
@@ -968,7 +1158,7 @@ func (game *AttackDefenseGame) startSshServer() error {
 							return
 						}
 
-						other, err := instance.Dial("tcp", "10.42.0.2:2222")
+						other, err := instance.Dial("tcp", VM_SSH_IP_PORT)
 						if err != nil {
 							_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("failed to dial instance: %s", err))
 							return
@@ -1018,12 +1208,6 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to generate keys: %w", err)
 	}
 
-	// Create a new ticker for the game.
-	game.Ticker = time.NewTicker(game.Config.TickRate.Duration)
-
-	// Create a new timer for the end of the game.
-	endTime := time.NewTimer(game.Config.Duration.Duration)
-
 	game.Router = &WireguardRouter{
 		serverUrl:     game.Config.Frontend.Url(),
 		publicAddress: game.Config.Frontend.Address,
@@ -1031,8 +1215,12 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Start the built in web server.
-	if err := game.startServer(); err != nil {
+	if err := game.startFrontendServer(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
+	}
+
+	if err := game.registerInternalServer(); err != nil {
+		return fmt.Errorf("failed to register internal server: %w", err)
 	}
 
 	if game.SshServer != "" {
@@ -1043,7 +1231,7 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Log the start of the game.
-	slog.Info("game starting", "completes", time.Now().Add(game.Config.Duration.Duration), "totalTicks", game.TotalTicks())
+	slog.Info("game starting", "completes", time.Now().Add(game.scaleDuration(game.Config.Duration.Duration)), "totalTicks", game.TotalTicks())
 
 	// Sort the timeline events by tick.
 	game.EventQueue = game.Config.Timeline
@@ -1068,7 +1256,11 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to start all teams: %w", err)
 	}
 
-	// TODO(joshua): Run a test tick to make sure all team machines are up.
+	// Create a new ticker for the game.
+	game.Ticker = time.NewTicker(game.scaleDuration(game.Config.TickRate.Duration))
+
+	// Create a new timer for the end of the game.
+	endTime := time.NewTimer(game.scaleDuration(game.Config.Duration.Duration))
 
 outer:
 	for {
@@ -1110,6 +1302,7 @@ var (
 	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
 	sshServerHostKey = flag.String("ssh-server-host-key", "", "The SSH server host key.")
 	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
+	timeScale        = flag.Float64("timescale", 1.0, "The time scale to run the game at.")
 )
 
 func appMain() error {
@@ -1164,6 +1357,7 @@ func appMain() error {
 		tinyRangeTemplates: make(map[string]string),
 		SshServer:          *sshServer,
 		SshServerHostKey:   *sshServerHostKey,
+		TimeScale:          *timeScale,
 	}
 
 	for _, team := range debugTeam {
