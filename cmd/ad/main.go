@@ -1062,16 +1062,25 @@ func (game *AttackDefenseGame) registerInternalServer() error {
 
 	// Add an API endpoint for getting a list of team IPs.
 	game.internalServer.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
+		playerTeam := GetTeam(r.Context())
+		if playerTeam == nil {
+			http.Error(w, "team not found", http.StatusNotFound)
+			return
+		}
+
 		teams := make([]struct {
+			Self        bool   `json:"self"`
 			IP          string `json:"ip"`
 			DisplayName string `json:"display_name"`
 		}, len(game.Teams))
 
 		for i, team := range game.Teams {
 			teams[i] = struct {
+				Self        bool   `json:"self"`
 				IP          string `json:"ip"`
 				DisplayName string `json:"display_name"`
 			}{
+				Self:        team.ID == playerTeam.ID,
 				IP:          team.IP(),
 				DisplayName: team.DisplayName,
 			}
