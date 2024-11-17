@@ -49,6 +49,12 @@ func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) er
 	return nil
 }
 
+type DeviceConfig struct {
+	ConfigKey string
+	Config    string
+	ID        int
+}
+
 type WireguardDevice struct {
 	ConfigKey string
 	ID        int
@@ -283,42 +289,94 @@ Endpoint = %s
 	return config, nil
 }
 
-func (r *WireguardRouter) AddDevice(name string) (string, error) {
+func (r *WireguardRouter) AddDevice(name string) (instanceId string, config string, id int, err error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
 	instanceUuid, err := uuid.NewRandom()
 	if err != nil {
-		return "", err
+		return "", "", -1, err
 	}
 
-	instanceId := instanceUuid.String()
+	instanceId = instanceUuid.String()
 
-	deviceId := len(r.endpoints)
+	id = len(r.endpoints)
 
 	wg, err := wireguard.NewServer(HOST_IP)
 	if err != nil {
-		return "", err
+		return "", "", -1, err
 	}
 
 	r.endpoints[instanceId] = &wireguardInstance{
 		wg:       wg,
 		isDevice: true,
-		deviceId: deviceId,
+		deviceId: id,
 		name:     name,
 	}
 
 	peerConfig, err := wg.CreatePeer(r.publicAddress)
 	if err != nil {
-		return "", err
+		return "", "", -1, err
 	}
 
 	deviceConfig, err := r.translateToDeviceConfig(r.endpoints[instanceId], peerConfig)
 	if err != nil {
-		return "", err
+		return "", "", -1, err
 	}
 
 	r.endpoints[instanceId].peerConfig = deviceConfig
 
-	return instanceId, nil
+	config, err = wg.GetConfig()
+	if err != nil {
+		return "", "", -1, err
+	}
+
+	return
+}
+
+func filterConfigToKeys(config string, keys []string) (string, error) {
+	var lines []string
+
+	for _, line := range strings.Split(config, "\n") {
+		k, _, ok := strings.Cut(line, "=")
+		if !ok {
+			if line == "" {
+				continue
+			}
+			return "", fmt.Errorf("invalid line: %s", line)
+		}
+
+		for _, key := range keys {
+			if k == key {
+				lines = append(lines, line)
+				break
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
+func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	newConfig, err := filterConfigToKeys(config.Config, []string{"private_key", "public_key", "listen_port", "allowed_ip", "protocol_version", "allowed_ip"})
+	if err != nil {
+		return err
+	}
+
+	wg, err := wireguard.NewFromConfig(HOST_IP, newConfig)
+	if err != nil {
+		return err
+	}
+
+	r.endpoints[config.ConfigKey] = &wireguardInstance{
+		wg:       wg,
+		isDevice: true,
+		deviceId: config.ID,
+		name:     name,
+	}
+
+	return nil
 }

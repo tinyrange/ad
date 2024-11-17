@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -36,6 +37,7 @@ var (
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
 	publicIp         = flag.String("ip", "", "The public IP of the server.")
+	persistancePath  = flag.String("persist-path", "local/persist", "The path to the config file.")
 )
 
 func appMain() error {
@@ -68,6 +70,16 @@ func appMain() error {
 		return err
 	}
 
+	configName := strings.TrimSuffix(filepath.Base(*configFile), filepath.Ext(*configFile))
+
+	persistDir := filepath.Join(*persistancePath, configName)
+
+	slog.Info("persisting to", "dir", persistDir)
+
+	if err := os.MkdirAll(persistDir, 0755); err != nil {
+		return err
+	}
+
 	var config Config
 
 	config.basePath = filepath.Dir(*configFile)
@@ -93,6 +105,7 @@ func appMain() error {
 	}
 
 	game := &AttackDefenseGame{
+		Persist:            NewPersistDatabase(persistDir),
 		Config:             config,
 		Events:             make(map[string]*Event),
 		tinyRangeTemplates: make(map[string]string),

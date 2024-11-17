@@ -16,11 +16,11 @@ import (
 
 var upgrader = websocket.Upgrader{}
 
-func (game *AttackDefenseGame) pageError(err error) htm.Fragment {
-	return game.pageLayout("Error", bootstrap.Alert(bootstrap.AlertColorDanger, htm.Text(err.Error())))
+func (game *AttackDefenseGame) publicPageError(err error) htm.Fragment {
+	return game.publicPageLayout("Error", bootstrap.Alert(bootstrap.AlertColorDanger, htm.Text(err.Error())))
 }
 
-func (game *AttackDefenseGame) pageLayout(title string, body ...htm.Fragment) htm.Fragment {
+func (game *AttackDefenseGame) publicPageLayout(title string, body ...htm.Fragment) htm.Fragment {
 	return html.Html(
 		htm.Attr("lang", "en"),
 		html.Head(
@@ -44,11 +44,11 @@ func (game *AttackDefenseGame) pageLayout(title string, body ...htm.Fragment) ht
 	)
 }
 
-func (game *AttackDefenseGame) startFrontendServer() error {
+func (game *AttackDefenseGame) startPublicServer() error {
 	handler := http.NewServeMux()
 
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		page := game.pageLayout("Home")
+		page := game.publicPageLayout("Home")
 
 		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
@@ -70,7 +70,7 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 			))
 		}
 
-		page := game.pageLayout("Instances", instanceList...)
+		page := game.publicPageLayout("Instances", instanceList...)
 
 		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
@@ -82,13 +82,13 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 		instanceId := r.PathValue("instance")
 
 		if _, err := game.getInstance(instanceId); err != nil {
-			if err := htm.Render(r.Context(), w, game.pageError(err)); err != nil {
+			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
 			}
 			return
 		}
 
-		page := game.pageLayout("Connect",
+		page := game.publicPageLayout("Connect",
 			htm.Group{
 				xtermjs.XTERM_CSS,
 				xtermjs.XTERM_JS,
@@ -146,7 +146,7 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 			))
 		}
 
-		page := game.pageLayout("Events", eventList...)
+		page := game.publicPageLayout("Events", eventList...)
 
 		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
@@ -159,7 +159,7 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 
 		if err := game.RunEvent(name); err != nil {
 			slog.Error("failed to run event", "err", err)
-			if err := htm.Render(r.Context(), w, game.pageError(err)); err != nil {
+			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
 			}
 			return
@@ -184,7 +184,7 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 			))
 		}
 
-		page := game.pageLayout("Devices",
+		page := game.publicPageLayout("Devices",
 			htm.Group(deviceList),
 			html.Form(
 				html.FormTarget("POST", "/api/device"),
@@ -202,9 +202,16 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 	handler.HandleFunc("POST /api/device", func(w http.ResponseWriter, r *http.Request) {
 		name := r.FormValue("name")
 
+		if name == "" {
+			if err := htm.Render(r.Context(), w, game.publicPageError(fmt.Errorf("name is required"))); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+			return
+		}
+
 		if err := game.AddDevice(name); err != nil {
 			slog.Error("failed to add device", "err", err)
-			if err := htm.Render(r.Context(), w, game.pageError(err)); err != nil {
+			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
 			}
 			return
@@ -226,7 +233,7 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
 
-	slog.Info("frontend server listening", "url", fmt.Sprintf(" http://%s:%d", game.Config.Frontend.Address, game.Config.Frontend.Port))
+	slog.Info("public server listening", "url", fmt.Sprintf(" http://%s:%d", game.Config.Frontend.Address, game.Config.Frontend.Port))
 
 	go func() {
 		if err := game.publicServer.Serve(listener); err != nil {

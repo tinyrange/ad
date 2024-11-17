@@ -6,6 +6,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/tinyrange/wireguard v0.0.1 h1:nqK9t54YqKpa/JeK1nfbfeannriP8BXKye3OlLSsdBw=
 github.com/tinyrange/wireguard v0.0.1/go.mod h1:Wc5XCR1OhWhldEFoTTse6epIi/bzspyV8KI7PzcVHn0=
+github.com/tinyrange/wireguard v0.0.2 h1:F4ipjs+mgeu0BM8aWMP/dCWWy/jm/DDM/VsoDsCTjiI=
+github.com/tinyrange/wireguard v0.0.2/go.mod h1:Wc5XCR1OhWhldEFoTTse6epIi/bzspyV8KI7PzcVHn0=
 golang.org/x/crypto v0.29.0 h1:L5SG1JTTXupVV3n6sUqMTeWbjAyfPwoda2DLX8J8FrQ=
 golang.org/x/crypto v0.29.0/go.mod h1:+F4F4N5hv6v38hfeYwTdx20oUvLLc+QfrE9Ax9HtgRg=
 golang.org/x/net v0.31.0 h1:68CPQngjLL0r2AlUKiSxtQFKvzRVbnzLwMUn5SzcLHo=

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -24,6 +23,9 @@ import (
 )
 
 type AttackDefenseGame struct {
+	// Persist is the database for the game to persist state.
+	Persist *PersistDatabase
+
 	// Config is the configuration for the game.
 	Config Config
 
@@ -59,7 +61,7 @@ type AttackDefenseGame struct {
 	// instances is a list of TinyRange instances.
 	instances []*TinyRangeInstance
 
-	// SshServer is the to create for admin connections.
+	// SshServer is the SSH server used for admin connections.
 	SshServer string
 
 	// SshServerHostKey is the host key for the SSH server.
@@ -68,8 +70,8 @@ type AttackDefenseGame struct {
 	// TimeScale is the time scale to run the game at.
 	TimeScale float64
 
-	publicServer   *http.Server
-	internalServer *http.ServeMux
+	publicServer  *http.Server
+	privateServer *http.ServeMux
 
 	rebuildTemplates bool
 }
@@ -170,7 +172,7 @@ func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) er
 			ctx := context.WithValue(r.Context(), CONTEXT_KEY_TEAM, info)
 
 			// Serve the request.
-			game.internalServer.ServeHTTP(w, r.WithContext(ctx))
+			game.privateServer.ServeHTTP(w, r.WithContext(ctx))
 		}))
 	}()
 
@@ -207,7 +209,7 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 	go func() {
 		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Serve the request.
-			game.internalServer.ServeHTTP(w, r)
+			game.privateServer.ServeHTTP(w, r)
 		}))
 	}()
 
@@ -510,65 +512,6 @@ func (game *AttackDefenseGame) GenerateKeys() error {
 	return nil
 }
 
-func (game *AttackDefenseGame) registerInternalServer() error {
-	game.internalServer = http.NewServeMux()
-
-	// Add a API endpoint for submitting flags.
-	game.internalServer.HandleFunc("POST /api/flag", func(w http.ResponseWriter, r *http.Request) {
-		info := GetInfo(r.Context())
-		if info == nil {
-			http.Error(w, "team not found", http.StatusNotFound)
-			return
-		}
-
-		flag := r.FormValue("flag")
-		if flag == "" {
-			http.Error(w, "flag not found", http.StatusBadRequest)
-
-			return
-		}
-
-		status := game.submitFlag(*info, flag)
-
-		if status != FlagAccepted {
-			slog.Info("received invalid flag", "team", info.Name, "flag", flag, "status", status)
-		}
-
-		fmt.Fprintf(w, "%s\n", status)
-	})
-
-	// Add an API endpoint for getting a list of team IPs.
-	game.internalServer.HandleFunc("GET /api/teams", func(w http.ResponseWriter, r *http.Request) {
-		playerTeam := GetInfo(r.Context())
-		if playerTeam == nil {
-			http.Error(w, "team not found", http.StatusNotFound)
-			return
-		}
-
-		teams := make([]struct {
-			Self        bool   `json:"self"`
-			IP          string `json:"ip"`
-			DisplayName string `json:"display_name"`
-		}, len(game.Teams))
-
-		for i, team := range game.Teams {
-			teams[i] = struct {
-				Self        bool   `json:"self"`
-				IP          string `json:"ip"`
-				DisplayName string `json:"display_name"`
-			}{
-				Self:        team.ID == playerTeam.ID,
-				IP:          team.IP(),
-				DisplayName: team.DisplayName,
-			}
-		}
-
-		json.NewEncoder(w).Encode(teams)
-	})
-
-	return nil
-}
-
 func (game *AttackDefenseGame) instanceFromName(name string) (*TinyRangeInstance, error) {
 	if name == "scorebot" {
 		return game.Config.ScoreBot.instance, nil
@@ -701,11 +644,11 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Start the built in web server.
-	if err := game.startFrontendServer(); err != nil {
+	if err := game.startPublicServer(); err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	if err := game.registerInternalServer(); err != nil {
+	if err := game.registerPrivateServer(); err != nil {
 		return fmt.Errorf("failed to register internal server: %w", err)
 	}
 
@@ -732,6 +675,26 @@ func (game *AttackDefenseGame) Run() error {
 	slices.SortFunc(game.EventQueue, func(a TimelineEvent, b TimelineEvent) int {
 		return int(a.Tick(game) - b.Tick(game))
 	})
+
+	// Load all existing device configurations.
+	if err := game.Persist.ForEach("devices", func(key string, read func(value interface{}) error) error {
+		var device DeviceConfig
+		if err := read(&device); err != nil {
+			return err
+		}
+
+		if err := game.Router.restoreDevice(key, device); err != nil {
+			return err
+		}
+
+		if err := game.registerFlowsForDevice(device.ConfigKey); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to load devices: %w", err)
+	}
 
 	// Boot the scorebot.
 	if err := game.Config.ScoreBot.Start(game); err != nil {
@@ -801,8 +764,20 @@ outer:
 }
 
 func (game *AttackDefenseGame) AddDevice(name string) error {
-	deviceInstance, err := game.Router.AddDevice(name)
+	if _, err := game.Persist.ValidateKey(name); err != nil {
+		return err
+	}
+
+	deviceInstance, deviceConfig, deviceId, err := game.Router.AddDevice(name)
 	if err != nil {
+		return err
+	}
+
+	if err := game.Persist.Set("devices", name, &DeviceConfig{
+		ConfigKey: deviceInstance,
+		ID:        deviceId,
+		Config:    deviceConfig,
+	}); err != nil {
 		return err
 	}
 
