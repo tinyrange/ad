@@ -35,6 +35,7 @@ var (
 	timeScale        = flag.Float64("timescale", 1.0, "The time scale to run the game at.")
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
+	publicIp         = flag.String("ip", "", "The public IP of the server.")
 )
 
 func appMain() error {
@@ -85,6 +86,10 @@ func appMain() error {
 
 	if *wait {
 		config.Wait = true
+	}
+
+	if *publicIp != "" {
+		config.Frontend.Address = *publicIp
 	}
 
 	game := &AttackDefenseGame{

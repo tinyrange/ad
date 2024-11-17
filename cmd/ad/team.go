@@ -70,11 +70,11 @@ func (t *Team) BotInstanceId() string {
 }
 
 func (t *Team) IP() string {
-	return net.IPv4(10, 42, 10, 10+byte(t.ID)).String()
+	return net.IPv4(10, 40, 10, 10+byte(t.ID)).String()
 }
 
 func (t *Team) BotIP() string {
-	return net.IPv4(10, 42, 20, 10+byte(t.ID)).String()
+	return net.IPv4(10, 40, 20, 10+byte(t.ID)).String()
 }
 
 func (t *Team) Stop() error {

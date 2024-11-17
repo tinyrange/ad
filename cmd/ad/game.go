@@ -100,6 +100,16 @@ func (game *AttackDefenseGame) getInstances() []*TinyRangeInstance {
 	return game.instances
 }
 
+func (game *AttackDefenseGame) GetEvents() []string {
+	events := make([]string, 0, len(game.Events))
+
+	for name := range game.Events {
+		events = append(events, name)
+	}
+
+	return events
+}
+
 func (game *AttackDefenseGame) scaleDuration(dur time.Duration) time.Duration {
 	return time.Duration(float64(dur.Nanoseconds()) * game.TimeScale)
 }
@@ -161,6 +171,43 @@ func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) er
 
 			// Serve the request.
 			game.internalServer.ServeHTTP(w, r.WithContext(ctx))
+		}))
+	}()
+
+	return nil
+}
+
+func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
+	for _, team := range game.Teams {
+		for _, service := range game.Config.Vulnbox.Services {
+			// Connect the device to the team machine.
+			if err := game.Router.AddSimpleForwarder(
+				deviceId, ipPort(team.Info().IP, service.Port),
+				team.Info().InstanceId, ipPort(VM_IP, service.Port),
+			); err != nil {
+				return err
+			}
+		}
+
+		// Connect the device to the team machine SSH port.
+		if err := game.Router.AddSimpleForwarder(
+			deviceId, ipPort(team.Info().IP, 2222),
+			team.Info().InstanceId, ipPort(VM_IP, 2222),
+		); err != nil {
+			return err
+		}
+	}
+
+	// Add the internal HTTP router.
+	internalWeb, err := game.Router.AddListener(deviceId, INTERNAL_WEB_IP_PORT)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Serve the request.
+			game.internalServer.ServeHTTP(w, r)
 		}))
 	}()
 
@@ -751,4 +798,23 @@ outer:
 	slog.Info("game complete")
 
 	return nil
+}
+
+func (game *AttackDefenseGame) AddDevice(name string) error {
+	deviceInstance, err := game.Router.AddDevice(name)
+	if err != nil {
+		return err
+	}
+
+	slog.Info("added device", "name", name, "instance", deviceInstance)
+
+	if err := game.registerFlowsForDevice(deviceInstance); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (game *AttackDefenseGame) GetDevices() []WireguardDevice {
+	return game.Router.GetDevices()
 }

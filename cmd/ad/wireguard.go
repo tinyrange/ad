@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"github.com/tinyrange/wireguard"
 )
@@ -15,6 +19,13 @@ import (
 type wireguardInstance struct {
 	wg         *wireguard.Wireguard
 	peerConfig string
+	isDevice   bool
+	deviceId   int
+	name       string
+}
+
+func (w *wireguardInstance) DeviceIP() string {
+	return net.IPv4(10, 40, 30, 1+byte(w.deviceId)).String()
 }
 
 func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) error {
@@ -36,6 +47,13 @@ func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) er
 	}()
 
 	return nil
+}
+
+type WireguardDevice struct {
+	ConfigKey string
+	ID        int
+	Name      string
+	IP        string
 }
 
 // A wireguard router that generates wireguard configurations.
@@ -168,7 +186,7 @@ func (r *WireguardRouter) DialContext(ctx context.Context, instanceId string, ne
 	return instance.wg.DialContext(ctx, network, address)
 }
 
-func (r *WireguardRouter) ServeConfig(w http.ResponseWriter, req *http.Request) {
+func (r *WireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) {
 	instanceId := req.PathValue("instance")
 
 	slog.Debug("serving wireguard config", "instance", instanceId)
@@ -184,5 +202,123 @@ func (r *WireguardRouter) ServeConfig(w http.ResponseWriter, req *http.Request) 
 }
 
 func (r *WireguardRouter) registerMux(mux *http.ServeMux) {
-	mux.HandleFunc("GET /wireguard/{instance}", r.ServeConfig)
+	mux.HandleFunc("GET /wireguard/{instance}", r.serveConfig)
+}
+
+func (r *WireguardRouter) GetDevices() []WireguardDevice {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	var devices []WireguardDevice
+
+	for instanceId, instance := range r.endpoints {
+		if !instance.isDevice {
+			continue
+		}
+
+		devices = append(devices, WireguardDevice{
+			ConfigKey: instanceId,
+			ID:        instance.deviceId,
+			Name:      instance.name,
+			IP:        instance.DeviceIP(),
+		})
+	}
+
+	return devices
+}
+
+func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, peerConfig string) (string, error) {
+	var (
+		privateKey string
+		publicKey  string
+		endpoint   string
+	)
+
+	for _, line := range strings.Split(peerConfig, "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			if line == "" {
+				continue
+			}
+			return "", fmt.Errorf("invalid line: %s", line)
+		}
+
+		switch k {
+		case "private_key":
+			privateKey = v
+		case "public_key":
+			publicKey = v
+		case "endpoint":
+			endpoint = v
+		}
+	}
+
+	// convert private and public key from hex to base64
+	privateKeyBytes, err := hex.DecodeString(privateKey)
+	if err != nil {
+		return "", err
+	}
+
+	privateKey = base64.StdEncoding.EncodeToString(privateKeyBytes)
+
+	publicKeyBytes, err := hex.DecodeString(publicKey)
+	if err != nil {
+		return "", err
+	}
+
+	publicKey = base64.StdEncoding.EncodeToString(publicKeyBytes)
+
+	config := fmt.Sprintf(`[Interface]
+Address = %s
+PrivateKey = %s
+
+[Peer]
+PublicKey = %s
+AllowedIPs = 10.40.0.0/16
+Endpoint = %s
+`,
+		instance.DeviceIP(), privateKey, publicKey, endpoint,
+	)
+
+	return config, nil
+}
+
+func (r *WireguardRouter) AddDevice(name string) (string, error) {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+
+	instanceUuid, err := uuid.NewRandom()
+	if err != nil {
+		return "", err
+	}
+
+	instanceId := instanceUuid.String()
+
+	deviceId := len(r.endpoints)
+
+	wg, err := wireguard.NewServer(HOST_IP)
+	if err != nil {
+		return "", err
+	}
+
+	r.endpoints[instanceId] = &wireguardInstance{
+		wg:       wg,
+		isDevice: true,
+		deviceId: deviceId,
+		name:     name,
+	}
+
+	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	if err != nil {
+		return "", err
+	}
+
+	deviceConfig, err := r.translateToDeviceConfig(r.endpoints[instanceId], peerConfig)
+	if err != nil {
+		return "", err
+	}
+
+	r.endpoints[instanceId].peerConfig = deviceConfig
+
+	return instanceId, nil
 }

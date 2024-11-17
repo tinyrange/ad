@@ -34,7 +34,10 @@ func (game *AttackDefenseGame) pageLayout(title string, body ...htm.Fragment) ht
 		),
 		html.Body(
 			bootstrap.Navbar(
-				bootstrap.NavbarBrand("/", html.Textf("%s - %s", game.Config.Title, title)),
+				bootstrap.NavbarBrand("/", html.Text(game.Config.Title)),
+				bootstrap.NavbarLink("/instances", html.Text("Instances")),
+				bootstrap.NavbarLink("/events", html.Text("Events")),
+				bootstrap.NavbarLink("/devices", html.Text("Devices")),
 			),
 			html.Div(bootstrap.Container, htm.Group(body)),
 		),
@@ -125,8 +128,33 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 		}
 	})
 
+	handler.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		events := game.GetEvents()
+
+		var eventList []htm.Fragment
+
+		for _, event := range events {
+			eventList = append(eventList, html.Div(
+				bootstrap.Card(
+					bootstrap.CardTitle(event),
+					html.Form(
+						html.FormTarget("POST", "/api/event"),
+						html.HiddenFormField(html.NewId(), "name", event),
+						bootstrap.SubmitButton(event, bootstrap.ButtonColorPrimary),
+					),
+				),
+			))
+		}
+
+		page := game.pageLayout("Events", eventList...)
+
+		if err := htm.Render(r.Context(), w, page); err != nil {
+			slog.Error("failed to render page", "err", err)
+		}
+	})
+
 	// POST /event runs an event by name.
-	handler.HandleFunc("POST /event", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("POST /api/event", func(w http.ResponseWriter, r *http.Request) {
 		name := r.FormValue("name")
 
 		if err := game.RunEvent(name); err != nil {
@@ -138,6 +166,51 @@ func (game *AttackDefenseGame) startFrontendServer() error {
 		}
 
 		http.Redirect(w, r, "/", http.StatusFound)
+	})
+
+	// GET /devices lists all devices and their WireGuard configuration and a button to add a new device.
+	handler.HandleFunc("GET /devices", func(w http.ResponseWriter, r *http.Request) {
+		devices := game.GetDevices()
+
+		var deviceList []htm.Fragment
+
+		for _, device := range devices {
+			deviceList = append(deviceList, html.Div(
+				bootstrap.Card(
+					bootstrap.CardTitle(device.Name),
+					html.Div(html.Strong(html.Text("IP Adddress:")), html.Textf("%s", device.IP)),
+					bootstrap.LinkButton("/wireguard/"+device.ConfigKey, bootstrap.ButtonColorPrimary, html.Text("Download Config")),
+				),
+			))
+		}
+
+		page := game.pageLayout("Devices",
+			htm.Group(deviceList),
+			html.Form(
+				html.FormTarget("POST", "/api/device"),
+				bootstrap.FormField("Name", "name", html.FormOptions{Kind: html.FormFieldText, Required: true, Value: "", Placeholder: "Device Name"}),
+				bootstrap.SubmitButton("Add Device", bootstrap.ButtonColorPrimary),
+			),
+		)
+
+		if err := htm.Render(r.Context(), w, page); err != nil {
+			slog.Error("failed to render page", "err", err)
+		}
+	})
+
+	// POST /api/device adds a new device.
+	handler.HandleFunc("POST /api/device", func(w http.ResponseWriter, r *http.Request) {
+		name := r.FormValue("name")
+
+		if err := game.AddDevice(name); err != nil {
+			slog.Error("failed to add device", "err", err)
+			if err := htm.Render(r.Context(), w, game.pageError(err)); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+			return
+		}
+
+		http.Redirect(w, r, "/devices", http.StatusFound)
 	})
 
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
