@@ -2,25 +2,42 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 )
 
 type TinyRangeInstance struct {
 	game       *AttackDefenseGame
 	cmd        *exec.Cmd
+	name       string
 	instanceId string
 }
 
+func (t *TinyRangeInstance) Name() string {
+	return t.name
+}
+
+func (t *TinyRangeInstance) InstanceId() string {
+	return t.instanceId
+}
+
 func (t *TinyRangeInstance) Dial(network, address string) (net.Conn, error) {
-	return t.game.Router.DialContext(context.Background(), t.instanceId, network, address)
+	return t.DialContext(context.Background(), network, address)
+}
+
+func (t *TinyRangeInstance) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return t.game.Router.DialContext(ctx, t.instanceId, network, address)
 }
 
 func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string) error {
@@ -105,6 +122,163 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 	// slog.Info("command output", "instance", t.instanceId, "output", string(out))
 
 	return string(out), nil
+}
+
+type webSocketWriter struct {
+	underlyingStream *websocket.Conn
+	recorder         io.WriteCloser
+}
+
+// Close implements io.WriteCloser.
+func (w *webSocketWriter) Close() error {
+	if w.recorder != nil {
+		return w.recorder.Close()
+	}
+
+	return nil
+}
+
+// Write implements io.WriteCloser.
+func (w *webSocketWriter) Write(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	// Always try to write to the user first.
+	s := base64.StdEncoding.EncodeToString(p)
+
+	err = w.underlyingStream.WriteJSON(&struct {
+		Output string `json:"output"`
+	}{s})
+	if err != nil {
+		return -1, err
+	}
+
+	// WebSockets are message oriented so short writes are not possible.
+	return len(p), nil
+}
+
+var (
+	_ io.WriteCloser = &webSocketWriter{}
+)
+
+func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
+	config := &ssh.ClientConfig{
+		User: "root",
+		Auth: []ssh.AuthMethod{
+			ssh.Password("insecurepassword"),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	var (
+		conn  net.Conn
+		c     ssh.Conn
+		chans <-chan ssh.NewChannel
+		reqs  <-chan *ssh.Request
+		err   error
+	)
+
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+
+		conn, err = t.DialContext(ctx, "tcp", VM_SSH_IP_PORT)
+		if err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				slog.Debug("failed to connect", "err", err)
+			}
+			continue
+		}
+
+		c, chans, reqs, err = ssh.NewClientConn(conn, VM_SSH_IP_PORT, config)
+		if err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				slog.Debug("failed to connect", "err", err)
+			}
+			continue
+		}
+
+		break
+	}
+
+	client := ssh.NewClient(c, chans, reqs)
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create session: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.RequestPty("xterm-256color", 25, 80, ssh.TerminalModes{
+		ssh.ECHO:          0,     // disable echoing
+		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
+		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
+	}); err != nil {
+		return fmt.Errorf("failed to request pty: %v", err)
+	}
+
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to pipe stdin: %v", err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to pipe stdout: %v", err)
+	}
+	defer stdin.Close()
+
+	if err := session.Shell(); err != nil {
+		return fmt.Errorf("failed to start shell: %v", err)
+	}
+
+	wsWriter := &webSocketWriter{underlyingStream: ws}
+	defer wsWriter.Close()
+
+	go func() {
+		for {
+			// Pipe output to the websocket
+			buf := make([]byte, 1024)
+
+			n, err := stdout.Read(buf)
+			if err != nil {
+				slog.Warn("failed to read stdout", "error", err)
+				break
+			}
+
+			_, err = wsWriter.Write(buf[:n])
+			if err != nil {
+				slog.Warn("failed to write to socket", "error", err)
+				break
+			}
+		}
+	}()
+
+	for {
+		var inputEv struct {
+			Resize bool   `json:"resize"`
+			Rows   int    `json:"rows"`
+			Cols   int    `json:"cols"`
+			Input  string `json:"input"`
+		}
+		// Get input from the websocket
+		err := ws.ReadJSON(&inputEv)
+		if err != nil {
+			return fmt.Errorf("failed to read json: %v", err)
+		}
+
+		if inputEv.Resize {
+			err := session.WindowChange(inputEv.Rows, inputEv.Cols)
+			if err != nil {
+				slog.Warn("failed to resize wsssh window", "error", err)
+			}
+		} else {
+			_, err = stdin.Write([]byte(inputEv.Input))
+			if err != nil {
+				return fmt.Errorf("failed to write to stdin: %v", err)
+			}
+		}
+	}
 }
 
 func (t *TinyRangeInstance) Stop() error {

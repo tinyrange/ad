@@ -60,6 +60,8 @@ type Config struct {
 	basePath string
 
 	Version       int             `yaml:"version"`
+	Title         string          `yaml:"title"`
+	Wait          bool            `yaml:"wait"`
 	TinyRange     TinyRangeConfig `yaml:"tinyrange"`
 	Frontend      FrontendConfig  `yaml:"frontend"`
 	Vulnbox       VulnboxConfig   `yaml:"vulnbox"`

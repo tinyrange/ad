@@ -26,7 +26,7 @@ func (i *arrayFlags) Set(value string) error {
 
 var (
 	configFile       = flag.String("config", "", "The config file to start the Attack/Defense server with.")
-	debugTeam        arrayFlags
+	opTeam           arrayFlags
 	tinyrangePath    = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
 	verbose          = flag.Bool("verbose", false, "Enable verbose logging.")
 	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
@@ -34,10 +34,11 @@ var (
 	cpuprofile       = flag.String("cpuprofile", "", "write cpu profile to file")
 	timeScale        = flag.Float64("timescale", 1.0, "The time scale to run the game at.")
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
+	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
 )
 
 func appMain() error {
-	flag.Var(&debugTeam, "debug-team", "Create a team for debugging.")
+	flag.Var(&opTeam, "op-team", "Create a team with no player attached.")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -82,6 +83,10 @@ func appMain() error {
 		config.TinyRange.Path = *tinyrangePath
 	}
 
+	if *wait {
+		config.Wait = true
+	}
+
 	game := &AttackDefenseGame{
 		Config:             config,
 		Events:             make(map[string]*Event),
@@ -92,7 +97,7 @@ func appMain() error {
 		rebuildTemplates:   *rebuild,
 	}
 
-	for _, team := range debugTeam {
+	for _, team := range opTeam {
 		game.AddTeam(team)
 	}
 

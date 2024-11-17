@@ -56,6 +56,9 @@ type AttackDefenseGame struct {
 	// It points to the VM config filename.
 	tinyRangeTemplates map[string]string
 
+	// instances is a list of TinyRange instances.
+	instances []*TinyRangeInstance
+
 	// SshServer is the to create for admin connections.
 	SshServer string
 
@@ -81,6 +84,20 @@ func (game *AttackDefenseGame) ScoreBotInstance() string {
 
 func (game *AttackDefenseGame) ResolvePath(path string) string {
 	return filepath.Join(game.Config.basePath, path)
+}
+
+func (game *AttackDefenseGame) getInstance(id string) (*TinyRangeInstance, error) {
+	for _, inst := range game.instances {
+		if inst.InstanceId() == id {
+			return inst, nil
+		}
+	}
+
+	return nil, fmt.Errorf("instance not found")
+}
+
+func (game *AttackDefenseGame) getInstances() []*TinyRangeInstance {
+	return game.instances
 }
 
 func (game *AttackDefenseGame) scaleDuration(dur time.Duration) time.Duration {
@@ -298,11 +315,14 @@ func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFi
 	// Start the instance.
 	inst := &TinyRangeInstance{
 		game: game,
+		name: name,
 	}
 
 	if err := inst.Start(templateFilename, instanceId, wireguardConfigUrl); err != nil {
 		return nil, err
 	}
+
+	game.instances = append(game.instances, inst)
 
 	return inst, nil
 }
@@ -335,6 +355,10 @@ func (game *AttackDefenseGame) AddTeam(name string) {
 
 func (game *AttackDefenseGame) AddEvent(name string, run EventCallback) {
 	game.Events[name] = &Event{Run: run}
+}
+
+func (game *AttackDefenseGame) RemoveEvent(name string) {
+	delete(game.Events, name)
 }
 
 // ForAllTeams runs the given function for each team in the game.
@@ -435,35 +459,6 @@ func (game *AttackDefenseGame) GenerateKeys() error {
 	game.Signer = signer
 
 	game.FlagGen = NewFlagGenerator("flag{", "}")
-
-	return nil
-}
-
-func (game *AttackDefenseGame) startFrontendServer() error {
-	handler := http.NewServeMux()
-
-	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Attack/Defense Game")
-	})
-
-	// Router is allowed to be public since it uses an API key to lookup a configuration.
-	game.Router.registerMux(handler)
-
-	game.publicServer = &http.Server{
-		Addr:    game.Config.Frontend.Address,
-		Handler: handler,
-	}
-
-	listener, err := net.Listen("tcp", game.Config.Frontend.Address+":"+fmt.Sprint(game.Config.Frontend.Port))
-	if err != nil {
-		return fmt.Errorf("failed to listen: %w", err)
-	}
-
-	go func() {
-		if err := game.publicServer.Serve(listener); err != nil {
-			slog.Error("failed to start server", "err", err)
-		}
-	}()
 
 	return nil
 }
@@ -685,18 +680,6 @@ func (game *AttackDefenseGame) Run() error {
 		}
 	}
 
-	// Start the game.
-	if err := game.Start(); err != nil {
-		return fmt.Errorf("failed to start game: %w", err)
-	}
-
-	return nil
-}
-
-func (game *AttackDefenseGame) Start() error {
-	// Log the start of the game.
-	slog.Info("game starting", "completes", time.Now().Add(game.scaleDuration(game.Config.Duration.Duration)), "totalTicks", game.TotalTicks())
-
 	// Sort the timeline events by tick.
 	game.EventQueue = game.Config.Timeline
 	slices.SortFunc(game.EventQueue, func(a TimelineEvent, b TimelineEvent) int {
@@ -719,6 +702,33 @@ func (game *AttackDefenseGame) Start() error {
 	}); err != nil {
 		return fmt.Errorf("failed to start all teams: %w", err)
 	}
+
+	if game.Config.Wait {
+		// Wait for a event to start the game.
+		slog.Info("waiting for event to start game")
+
+		start := make(chan struct{})
+
+		game.AddEvent("start", func(game *AttackDefenseGame) error {
+			close(start)
+			game.RemoveEvent("start")
+			return nil
+		})
+
+		<-start
+	}
+
+	// Start the game.
+	if err := game.Start(); err != nil {
+		return fmt.Errorf("failed to start game: %w", err)
+	}
+
+	return nil
+}
+
+func (game *AttackDefenseGame) Start() error {
+	// Log the start of the game.
+	slog.Info("game starting", "completes", time.Now().Add(game.scaleDuration(game.Config.Duration.Duration)), "totalTicks", game.TotalTicks())
 
 	// Create a new ticker for the game.
 	game.Ticker = time.NewTicker(game.scaleDuration(game.Config.TickRate.Duration))

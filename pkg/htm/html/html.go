@@ -6,20 +6,23 @@ import (
 	"math/rand"
 	"strconv"
 
-	"github.com/tinyrange/tinyrange/pkg/htm"
+	"github.com/tinyrange/ad/pkg/htm"
 )
 
 func Text(s string) htm.Fragment                 { return htm.Text(s) }
 func Textf(format string, a ...any) htm.Fragment { return Text(fmt.Sprintf(format, a...)) }
 
-func Html(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("html", children...) }
-func Head(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("head", children...) }
-func Body(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("body", children...) }
-func Div(children ...htm.Fragment) htm.Fragment  { return htm.NewHtmlFragment("div", children...) }
-func Span(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("span", children...) }
-func Pre(children ...htm.Fragment) htm.Fragment  { return htm.NewHtmlFragment("pre", children...) }
-func Code(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("code", children...) }
-func A(children ...htm.Fragment) htm.Fragment    { return htm.NewHtmlFragment("a", children...) }
+func Html(children ...htm.Fragment) htm.Fragment     { return htm.NewHtmlFragment("html", children...) }
+func Head(children ...htm.Fragment) htm.Fragment     { return htm.NewHtmlFragment("head", children...) }
+func Body(children ...htm.Fragment) htm.Fragment     { return htm.NewHtmlFragment("body", children...) }
+func Div(children ...htm.Fragment) htm.Fragment      { return htm.NewHtmlFragment("div", children...) }
+func Span(children ...htm.Fragment) htm.Fragment     { return htm.NewHtmlFragment("span", children...) }
+func Pre(children ...htm.Fragment) htm.Fragment      { return htm.NewHtmlFragment("pre", children...) }
+func Code(children ...htm.Fragment) htm.Fragment     { return htm.NewHtmlFragment("code", children...) }
+func A(children ...htm.Fragment) htm.Fragment        { return htm.NewHtmlFragment("a", children...) }
+func P(children ...htm.Fragment) htm.Fragment        { return htm.NewHtmlFragment("p", children...) }
+func Strong(children ...htm.Fragment) htm.Fragment   { return htm.NewHtmlFragment("strong", children...) }
+func Emphasis(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("em", children...) }
 
 func H1(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("h1", children...) }
 func H2(children ...htm.Fragment) htm.Fragment { return htm.NewHtmlFragment("h2", children...) }

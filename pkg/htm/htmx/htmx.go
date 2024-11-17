@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tinyrange/tinyrange/pkg/htm"
-	"github.com/tinyrange/tinyrange/pkg/htm/html"
+	"github.com/tinyrange/ad/pkg/htm"
+	"github.com/tinyrange/ad/pkg/htm/html"
 )
 
 //go:embed htmx.min.js
