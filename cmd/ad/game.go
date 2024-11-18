@@ -253,20 +253,28 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 		); err != nil {
 			return err
 		}
-	}
 
-	// Add the internal HTTP router.
-	internalWeb, err := game.Router.AddListener(deviceId, INTERNAL_WEB_IP_PORT)
-	if err != nil {
-		return err
-	}
+		// TODO: Check if the device belongs to a bot.
+		if game.Config.Bots.Enabled {
+			for _, service := range game.Config.Vulnbox.Services {
+				// Connect the device to the bot machine.
+				if err := game.Router.AddSimpleForwarder(
+					deviceId, ipPort(team.BotInfo().IP, service.Port),
+					team.BotInfo().InstanceId, ipPort(VM_IP, service.Port),
+				); err != nil {
+					return err
+				}
+			}
 
-	go func() {
-		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Serve the request.
-			game.privateServer.ServeHTTP(w, r)
-		}))
-	}()
+			// Connect the device to the bot machine SSH port.
+			if err := game.Router.AddSimpleForwarder(
+				deviceId, ipPort(team.BotInfo().IP, 2222),
+				team.BotInfo().InstanceId, ipPort(VM_IP, 2222),
+			); err != nil {
+				return err
+			}
+		}
+	}
 
 	return nil
 }
@@ -929,6 +937,8 @@ func (game *AttackDefenseGame) Run() error {
 		return int(a.Tick(game) - b.Tick(game))
 	})
 
+	var configKeys []string
+
 	// Load all existing device configurations.
 	if err := game.Persist.ForEach("devices", func(key string, read func(value interface{}) error) error {
 		var device DeviceConfig
@@ -940,9 +950,20 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		if err := game.registerFlowsForDevice(device.ConfigKey); err != nil {
+		// Add the internal HTTP router.
+		internalWeb, err := game.Router.AddListener(device.ConfigKey, INTERNAL_WEB_IP_PORT)
+		if err != nil {
 			return err
 		}
+
+		go func() {
+			http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Serve the request.
+				game.privateServer.ServeHTTP(w, r)
+			}))
+		}()
+
+		configKeys = append(configKeys, device.ConfigKey)
 
 		return nil
 	}); err != nil {
@@ -964,6 +985,12 @@ func (game *AttackDefenseGame) Run() error {
 		return t.Start(game)
 	}); err != nil {
 		return fmt.Errorf("failed to start all teams: %w", err)
+	}
+
+	for _, configKey := range configKeys {
+		if err := game.registerFlowsForDevice(configKey); err != nil {
+			return err
+		}
 	}
 
 	if game.Config.Wait {
