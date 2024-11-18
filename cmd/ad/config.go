@@ -18,13 +18,15 @@ func (f *FrontendConfig) Url() string {
 }
 
 type ServiceConfig struct {
-	Port int `yaml:"port"`
+	Id   int    `yaml:"id"`
+	Name string `yaml:"name"`
+	Port int    `yaml:"port"`
 }
 
 type VulnboxConfig struct {
-	Template     string                   `yaml:"template"`
-	InitTemplate string                   `yaml:"init"`
-	Services     map[string]ServiceConfig `yaml:"services"`
+	Template     string          `yaml:"template"`
+	InitTemplate string          `yaml:"init"`
+	Services     []ServiceConfig `yaml:"services"`
 }
 
 type EventDefinition struct {
@@ -41,6 +43,12 @@ type BotConfig struct {
 
 func (b *BotConfig) Start() (*TinyRangeInstance, error) {
 	return nil, fmt.Errorf("BotConfig.Start not implemented")
+}
+
+type ScoringConfig struct {
+	PointsPerTick       float64 `yaml:"points_per_tick"`
+	PointsPerStolenFlag float64 `yaml:"points_per_stolen_flag"`
+	PointsPerLostFlag   float64 `yaml:"points_per_lost_flag"`
 }
 
 type TimelineEvent struct {
@@ -62,6 +70,7 @@ type Config struct {
 	Version       int             `yaml:"version"`
 	Title         string          `yaml:"title"`
 	Wait          bool            `yaml:"wait"`
+	WaitAfter     bool            `yaml:"wait_after"`
 	TinyRange     TinyRangeConfig `yaml:"tinyrange"`
 	Frontend      FrontendConfig  `yaml:"frontend"`
 	Vulnbox       VulnboxConfig   `yaml:"vulnbox"`
@@ -70,5 +79,6 @@ type Config struct {
 	TickRate      Duration        `yaml:"tick_rate"`
 	Duration      Duration        `yaml:"duration"`
 	FlagValidTime Duration        `yaml:"flag_valid_time"`
+	Scoring       ScoringConfig   `yaml:"scoring"`
 	Timeline      []TimelineEvent `yaml:"timeline"`
 }

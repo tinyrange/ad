@@ -74,12 +74,13 @@ type Event struct {
 type FlagStatus string
 
 const (
-	FlagAccepted    FlagStatus = "FLAG_ACCEPTED"
-	FlagRejected    FlagStatus = "FLAG_REJECTED"
-	FlagExpired     FlagStatus = "FLAG_EXPIRED"
-	FlagNotYetValid FlagStatus = "FLAG_NOT_YET_VALID"
-	FlagFromOwnTeam FlagStatus = "FLAG_FROM_OWN_TEAM"
-	InvalidFlag     FlagStatus = "INVALID_FLAG"
-	InvalidService  FlagStatus = "INVALID_SERVICE"
-	InvalidTeam     FlagStatus = "INVALID_TEAM"
+	GameNotRunning    FlagStatus = "GAME_NOT_RUNNING"
+	FlagAccepted      FlagStatus = "FLAG_ACCEPTED"
+	FlagAlreadyStolen FlagStatus = "FLAG_ALREADY_STOLEN"
+	FlagExpired       FlagStatus = "FLAG_EXPIRED"
+	FlagNotYetValid   FlagStatus = "FLAG_NOT_YET_VALID"
+	FlagFromOwnTeam   FlagStatus = "FLAG_FROM_OWN_TEAM"
+	InvalidFlag       FlagStatus = "INVALID_FLAG"
+	InvalidService    FlagStatus = "INVALID_SERVICE"
+	InvalidTeam       FlagStatus = "INVALID_TEAM"
 )

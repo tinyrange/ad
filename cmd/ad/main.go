@@ -36,6 +36,7 @@ var (
 	timeScale        = flag.Float64("timescale", 1.0, "The time scale to run the game at.")
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
+	waitAfter        = flag.Bool("wait-after", false, "Keep services up after the game is complete.")
 	publicIp         = flag.String("ip", "", "The public IP of the server.")
 	persistancePath  = flag.String("persist-path", "local/persist", "The path to the config file.")
 )
@@ -98,6 +99,10 @@ func appMain() error {
 
 	if *wait {
 		config.Wait = true
+	}
+
+	if *waitAfter {
+		config.WaitAfter = true
 	}
 
 	if *publicIp != "" {

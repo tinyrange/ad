@@ -25,35 +25,7 @@ type Team struct {
 	botInstance  *TinyRangeInstance
 }
 
-func (t *Team) Info() TargetInfo {
-	return TargetInfo{
-		ID:         t.ID,
-		Name:       t.DisplayName,
-		IP:         t.IP(),
-		InstanceId: t.InstanceId(),
-		IsBot:      false,
-	}
-}
-
-func (t *Team) BotInfo() TargetInfo {
-	return TargetInfo{
-		ID:         BOT_ID_OFFSET + t.ID,
-		Name:       t.DisplayName + "_bot",
-		IP:         t.BotIP(),
-		InstanceId: t.BotInstanceId(),
-		IsBot:      true,
-	}
-}
-
-func (t *Team) submitFlag(bot bool, tickId int, teamId int, serviceId int) error {
-	if bot {
-		slog.Info("submitting flag", "team", t.DisplayName+"_bot", "tick", tickId, "otherTeam", teamId, "service", serviceId)
-	} else {
-		slog.Info("submitting flag", "team", t.DisplayName, "tick", tickId, "otherTeam", teamId, "service", serviceId)
-	}
-
-	return nil
-}
+func (t *Team) BotId() int { return BOT_ID_OFFSET + t.ID }
 
 func (t *Team) InstanceId() string {
 	if t.teamInstance == nil {
@@ -75,6 +47,26 @@ func (t *Team) IP() string {
 
 func (t *Team) BotIP() string {
 	return net.IPv4(10, 40, 20, 10+byte(t.ID)).String()
+}
+
+func (t *Team) Info() TargetInfo {
+	return TargetInfo{
+		ID:         t.ID,
+		Name:       t.DisplayName,
+		IP:         t.IP(),
+		InstanceId: t.InstanceId(),
+		IsBot:      false,
+	}
+}
+
+func (t *Team) BotInfo() TargetInfo {
+	return TargetInfo{
+		ID:         t.BotId(),
+		Name:       t.DisplayName + "_bot",
+		IP:         t.BotIP(),
+		InstanceId: t.BotInstanceId(),
+		IsBot:      true,
+	}
 }
 
 func (t *Team) Stop() error {

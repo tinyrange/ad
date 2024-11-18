@@ -15,12 +15,61 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
 )
+
+type FlagInfo struct {
+	TeamId int `json:"teamId"`
+	TickId int `json:"tickId"`
+}
+
+type ServiceState struct {
+	Name string `json:"name"`
+
+	// Summary points of the service.
+	Points        float64 `json:"points"`
+	TickPoints    float64 `json:"tickPoints"`
+	AttackPoints  float64 `json:"attackPoints"`
+	DefensePoints float64 `json:"defensePoints"`
+	UptimePoints  float64 `json:"uptimePoints"`
+
+	// Raw data for the service.
+
+	// A list of teamIds that flags were lost to.
+	LostFlags []FlagInfo `json:"lostFlags"`
+
+	// A list of teamIds that flags were stolen from.
+	StolenFlags []FlagInfo `json:"stolenFlags"`
+
+	SuccessfulUptimeChecks int `json:"successfulUptimeChecks"`
+	FailedUptimeChecks     int `json:"failedUptimeChecks"`
+}
+
+type TeamState struct {
+	IsBot bool   `json:"isBot"`
+	Name  string `json:"name"`
+
+	// Summary points of the team.
+	Points   float64 `json:"points"`
+	Position int     `json:"position"`
+
+	// Raw data for the team.
+	Services map[int]*ServiceState `json:"services"`
+}
+
+func (t *TeamState) GetService(id int) *ServiceState { return t.Services[id] }
+
+type ScoreboardState struct {
+	Tick  int64              `json:"tick"`
+	Teams map[int]*TeamState `json:"teams"`
+}
+
+func (s *ScoreboardState) GetTeam(id int) *TeamState { return s.Teams[id] }
 
 type AttackDefenseGame struct {
 	// Persist is the database for the game to persist state.
@@ -69,6 +118,12 @@ type AttackDefenseGame struct {
 
 	// TimeScale is the time scale to run the game at.
 	TimeScale float64
+
+	scoreboardMtx sync.RWMutex
+	Running       atomic.Bool
+	CurrentState  *ScoreboardState
+	Ticks         []*ScoreboardState
+	OverallState  *ScoreboardState
 
 	publicServer  *http.Server
 	privateServer *http.ServeMux
@@ -216,15 +271,17 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 	return nil
 }
 
-func (game *AttackDefenseGame) getTeam(id int) (*Team, error) {
-	if id < 0 || id >= len(game.Teams) {
-		return nil, fmt.Errorf("team not found")
+func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
+	if !game.Running.Load() {
+		return GameNotRunning
 	}
 
-	return game.Teams[id], nil
-}
+	// Locking the mutex now ensures the flag is counted for the current tick.
+	// It also ensures that the flag is not counted twice.
+	// And it means if a new tick if about to start the flag will be counted for the current tick.
+	game.scoreboardMtx.Lock()
+	defer game.scoreboardMtx.Unlock()
 
-func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
 	tickId, teamId, serviceId, ok := game.FlagGen.Verify(game.Signer.Public(), flag)
 	if !ok {
 		return InvalidFlag
@@ -238,22 +295,30 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 		return InvalidService
 	}
 
-	if int64(tickId) < game.CurrentTick-game.FlagValidTicks() {
+	if int64(tickId) < game.CurrentState.Tick-game.FlagValidTicks() {
 		return FlagExpired
 	}
 
-	if int64(tickId) > game.CurrentTick {
+	if int64(tickId) > game.CurrentState.Tick {
 		return FlagNotYetValid
 	}
 
-	team, err := game.getTeam(teamId)
-	if err != nil {
-		return InvalidTeam
+	ownService := game.CurrentState.Teams[info.ID].Services[serviceId]
+
+	// Check if the flag has already been stolen.
+	for _, stolen := range ownService.StolenFlags {
+		if stolen.TeamId == teamId && stolen.TickId == tickId {
+			return FlagAlreadyStolen
+		}
 	}
 
-	if err := team.submitFlag(info.IsBot, tickId, teamId, serviceId); err != nil {
-		return FlagRejected
-	}
+	slog.Info("flag accepted", "team", info.Name, "target", teamId, "service", serviceId, "tick", tickId)
+
+	ownService.StolenFlags = append(ownService.StolenFlags, FlagInfo{TeamId: teamId, TickId: tickId})
+
+	otherService := game.CurrentState.Teams[teamId].Services[serviceId]
+
+	otherService.LostFlags = append(otherService.LostFlags, FlagInfo{TeamId: info.ID, TickId: tickId})
 
 	return FlagAccepted
 }
@@ -448,7 +513,168 @@ func (game *AttackDefenseGame) ForAllTeams(includeBots bool, f func(t *Team, inf
 	return nil
 }
 
+func (game *AttackDefenseGame) setServiceOverallScore(service *ServiceState) {
+	totalTicks := float64(service.SuccessfulUptimeChecks + service.FailedUptimeChecks)
+
+	// Calculate the tick points for the service.
+	service.TickPoints = totalTicks * game.Config.Scoring.PointsPerTick
+
+	// Calculate the attack points for the service.
+	service.AttackPoints = float64(len(service.StolenFlags)) * game.Config.Scoring.PointsPerStolenFlag
+
+	// Calculate the defense points for the service.
+	service.DefensePoints = float64(len(service.LostFlags)) * game.Config.Scoring.PointsPerLostFlag
+
+	// Calculate the uptime points for the service.
+	service.UptimePoints = float64(service.SuccessfulUptimeChecks) / totalTicks
+
+	// Calculate the overall score for the service.
+	service.Points = (service.TickPoints + service.AttackPoints + service.DefensePoints) * service.UptimePoints
+}
+
+func (game *AttackDefenseGame) setTeamOverallScore(team *TeamState) {
+	score := 0.0
+
+	for _, service := range team.Services {
+		game.setServiceOverallScore(service)
+
+		score += service.Points
+	}
+
+	team.Points = score
+}
+
+func (game *AttackDefenseGame) summarizeState(ticks []*ScoreboardState) *ScoreboardState {
+	result := &ScoreboardState{
+		Tick:  0,
+		Teams: make(map[int]*TeamState),
+	}
+
+	// Sum up the overall raw data from each tick.
+	for _, tick := range ticks {
+		for teamId, team := range tick.Teams {
+			teamState, ok := result.Teams[teamId]
+			if !ok {
+				teamState = &TeamState{
+					IsBot: team.IsBot,
+					Name:  team.Name,
+				}
+
+				teamState.Services = make(map[int]*ServiceState)
+
+				result.Teams[teamId] = teamState
+			}
+
+			for i, service := range team.Services {
+				serviceState, ok := teamState.Services[i]
+				if !ok {
+					serviceState = &ServiceState{
+						Name: service.Name,
+					}
+
+					teamState.Services[i] = serviceState
+				}
+
+				// Add the raw data from the service.
+				serviceState.LostFlags = append(serviceState.LostFlags, service.LostFlags...)
+				serviceState.StolenFlags = append(serviceState.StolenFlags, service.StolenFlags...)
+				serviceState.SuccessfulUptimeChecks += service.SuccessfulUptimeChecks
+				serviceState.FailedUptimeChecks += service.FailedUptimeChecks
+			}
+		}
+
+		if tick.Tick > result.Tick {
+			result.Tick = tick.Tick
+		}
+	}
+
+	// Set the overall scores and collect the teams.
+	teamPositions := make([]*TeamState, 0, len(result.Teams))
+
+	for _, team := range result.Teams {
+		game.setTeamOverallScore(team)
+
+		teamPositions = append(teamPositions, team)
+	}
+
+	// Sort the teams by score.
+	slices.SortFunc(teamPositions, func(a, b *TeamState) int {
+		return int(b.Points) - int(a.Points)
+	})
+
+	// Set the positions.
+	for i, team := range teamPositions {
+		team.Position = i + 1
+	}
+
+	return result
+}
+
+func (game *AttackDefenseGame) updateScoreboard() error {
+	game.scoreboardMtx.Lock()
+	defer game.scoreboardMtx.Unlock()
+
+	// Compute the overall state.
+	if game.CurrentState != nil {
+		game.CurrentState = game.summarizeState([]*ScoreboardState{game.CurrentState})
+
+		game.Ticks = append(game.Ticks, game.CurrentState)
+
+		game.OverallState = game.summarizeState(game.Ticks)
+	}
+
+	// Reset the current scoreboard state.
+	game.CurrentState = &ScoreboardState{
+		Tick:  game.CurrentTick,
+		Teams: make(map[int]*TeamState),
+	}
+
+	// Populate the new state with the teams.
+	for _, team := range game.Teams {
+		teamState := &TeamState{
+			IsBot: false,
+			Name:  team.DisplayName,
+		}
+
+		// Populate the services for the team.
+		teamState.Services = make(map[int]*ServiceState)
+		for i, service := range game.Config.Vulnbox.Services {
+			teamState.Services[i] = &ServiceState{
+				Name: service.Name,
+			}
+		}
+
+		// Add the team to the current state.
+		game.CurrentState.Teams[team.ID] = teamState
+
+		if game.Config.Bots.Enabled {
+			// Add the bot to the current state.
+			botState := &TeamState{
+				IsBot: true,
+				Name:  team.DisplayName + "_bot",
+			}
+
+			// Populate the services for the bot.
+			botState.Services = make(map[int]*ServiceState)
+			for i, service := range game.Config.Vulnbox.Services {
+				botState.Services[i] = &ServiceState{
+					Name: service.Name,
+				}
+			}
+
+			// Add the bot to the current state.
+			game.CurrentState.Teams[team.BotId()] = botState
+		}
+	}
+
+	return nil
+}
+
 func (game *AttackDefenseGame) Tick() error {
+	if game.CurrentTick >= game.TotalTicks() {
+		return nil
+	}
+
 	// Increment the current tick.
 	game.CurrentTick += 1
 
@@ -456,38 +682,65 @@ func (game *AttackDefenseGame) Tick() error {
 
 	start := time.Now()
 
-	// Send the scorebot command to each team.
-	if err := game.ForAllTeams(true, func(t *Team, info TargetInfo) error {
-		start := time.Now()
-
-		// Delay this randomly during the tick interval.
-		totalTickTime := game.scaleDuration(game.Config.TickRate.Duration)
-
-		delay := time.Duration(rand.Intn(int(totalTickTime.Milliseconds())/2)) * time.Millisecond
-
-		time.Sleep(delay)
-
-		newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, 0, game.Signer)
-
-		success, message, err := game.Config.ScoreBot.Run(game, info, newFlag)
-		if err != nil {
-			return err
-		}
-
-		slog.Info("scorebot response", "team", info.Name, "success", success, "message", message, "duration", time.Since(start))
-
-		return nil
-	}); err != nil {
-		slog.Error("failed to run scorebot for each team", "err", err)
+	if err := game.updateScoreboard(); err != nil {
+		slog.Error("failed to update scoreboard", "err", err)
+		return err
 	}
 
-	// Run any events that are scheduled for this tick.
+	// Run any events that are scheduled for this tick at the start of the tick.
 	for _, ev := range game.EventQueue {
 		if ev.Tick(game) == game.CurrentTick {
 			if err := ev.Run(game); err != nil {
 				slog.Error("failed to run event", "name", ev.Event, "err", err)
 			}
 		}
+	}
+
+	// Send the scorebot command to each team.
+	if err := game.ForAllTeams(true, func(t *Team, info TargetInfo) error {
+		start := time.Now()
+
+		// Run the scorebot for each service.
+		if err := game.Config.ScoreBot.ForEachService(func(service *ScoreBotServiceConfig) error {
+			// Delay this randomly during the tick interval.
+			totalTickTime := game.scaleDuration(game.Config.TickRate.Duration)
+
+			delay := time.Duration(rand.Intn(int(totalTickTime.Milliseconds())/2)) * time.Millisecond
+
+			time.Sleep(delay)
+
+			newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, service.Id, game.Signer)
+
+			success, message, err := service.Run(&game.Config.ScoreBot, game, info, newFlag)
+			if err != nil {
+				return err
+			}
+
+			slog.Info("scorebot response",
+				"team", info.Name,
+				"service", service.Id,
+				"success", success,
+				"message", message,
+				"duration", time.Since(start),
+			)
+
+			// Update the service state.
+			if success {
+				serviceState := game.CurrentState.Teams[info.ID].Services[service.Id]
+				serviceState.SuccessfulUptimeChecks += 1
+			} else {
+				serviceState := game.CurrentState.Teams[info.ID].Services[service.Id]
+				serviceState.FailedUptimeChecks += 1
+			}
+
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		slog.Error("failed to run scorebot for each team", "err", err)
 	}
 
 	dur := time.Since(start)
@@ -733,6 +986,13 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to start game: %w", err)
 	}
 
+	if game.Config.WaitAfter {
+		slog.Info("use Ctrl+C to stop the game")
+
+		// Yield forever until the user stops the game.
+		<-make(chan struct{})
+	}
+
 	return nil
 }
 
@@ -740,11 +1000,14 @@ func (game *AttackDefenseGame) Start() error {
 	// Log the start of the game.
 	slog.Info("game starting", "completes", time.Now().Add(game.scaleDuration(game.Config.Duration.Duration)), "totalTicks", game.TotalTicks())
 
+	game.Running.Store(true)
+
 	// Create a new ticker for the game.
 	game.Ticker = time.NewTicker(game.scaleDuration(game.Config.TickRate.Duration))
 
 	// Create a new timer for the end of the game.
-	endTime := time.NewTimer(game.scaleDuration(game.Config.Duration.Duration))
+	// Always add one tick on the end so the game has exactly the right number of ticks.
+	endTime := time.NewTimer(game.scaleDuration(game.Config.Duration.Duration) + game.scaleDuration(game.Config.TickRate.Duration))
 
 outer:
 	for {
@@ -758,7 +1021,13 @@ outer:
 		}
 	}
 
+	if err := game.updateScoreboard(); err != nil {
+		slog.Error("failed to update scoreboard", "err", err)
+	}
+
 	slog.Info("game complete")
+
+	game.Running.Store(false)
 
 	return nil
 }

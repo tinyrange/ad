@@ -9,17 +9,15 @@ import (
 	"time"
 )
 
-type ScoreBotConfig struct {
-	Template    string `yaml:"template"`
-	Command     string `yaml:"command"`
-	HealthCheck string `yaml:"health_check"`
+type ScoreBotServiceConfig struct {
+	Id      int    `yaml:"id"`
+	Command string `yaml:"command"`
 
-	instance *TinyRangeInstance
-	mtx      sync.Mutex
-	tpl      *template.Template
+	mtx sync.Mutex
+	tpl *template.Template
 }
 
-func (v *ScoreBotConfig) getTemplate() (*template.Template, error) {
+func (v *ScoreBotServiceConfig) getTemplate() (*template.Template, error) {
 	v.mtx.Lock()
 	defer v.mtx.Unlock()
 
@@ -33,6 +31,52 @@ func (v *ScoreBotConfig) getTemplate() (*template.Template, error) {
 	}
 
 	return v.tpl, nil
+}
+
+type scoreBotResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
+	tpl, err := v.getTemplate()
+	if err != nil {
+		return false, "", err
+	}
+
+	var buf strings.Builder
+
+	if err := tpl.Execute(&buf, &struct {
+		TeamIP  string
+		NewFlag string
+	}{
+		TeamIP:  info.IP,
+		NewFlag: flag,
+	}); err != nil {
+		return false, "", err
+	}
+
+	resp, err := sb.instance.RunCommand(buf.String(), 5*time.Second)
+	if err != nil {
+		// This is considered a internal error.
+		return false, "", err
+	}
+
+	var response scoreBotResponse
+
+	if err := json.Unmarshal([]byte(resp), &response); err != nil {
+		return false, "", err
+	}
+
+	return response.Status == "success", response.Message, nil
+}
+
+type ScoreBotConfig struct {
+	Template    string                   `yaml:"template"`
+	HealthCheck string                   `yaml:"health_check"`
+	Services    []*ScoreBotServiceConfig `yaml:"services"`
+
+	instance *TinyRangeInstance
 }
 
 func (v *ScoreBotConfig) Stop() error {
@@ -74,40 +118,26 @@ func (v *ScoreBotConfig) Wait() error {
 	}
 }
 
-type scoreBotResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
+func (v *ScoreBotConfig) ForEachService(cb func(*ScoreBotServiceConfig) error) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(v.Services))
 
-func (sb *ScoreBotConfig) Run(game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
-	tpl, err := sb.getTemplate()
-	if err != nil {
-		return false, "", err
+	for _, service := range v.Services {
+		wg.Add(1)
+		go func(service *ScoreBotServiceConfig) {
+			defer wg.Done()
+			if err := cb(service); err != nil {
+				errChan <- err
+			}
+		}(service)
 	}
 
-	var buf strings.Builder
+	wg.Wait()
+	close(errChan)
 
-	if err := tpl.Execute(&buf, &struct {
-		TeamIP  string
-		NewFlag string
-	}{
-		TeamIP:  info.IP,
-		NewFlag: flag,
-	}); err != nil {
-		return false, "", err
+	if len(errChan) > 0 {
+		return <-errChan
 	}
 
-	resp, err := sb.instance.RunCommand(buf.String(), 5*time.Second)
-	if err != nil {
-		// This is considered a internal error.
-		return false, "", err
-	}
-
-	var response scoreBotResponse
-
-	if err := json.Unmarshal([]byte(resp), &response); err != nil {
-		return false, "", err
-	}
-
-	return response.Status == "success", response.Message, nil
+	return nil
 }

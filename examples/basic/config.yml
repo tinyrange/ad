@@ -13,7 +13,8 @@ vulnbox:
   template: vulnbox/vulnbox.yml
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
   services:
-    hello:
+    - id: 0
+      name: "hello"
       port: 5000
 
 bots:
@@ -26,8 +27,15 @@ bots:
 scorebot:
   template: scorebot/scorebot.yml
   config_file: game.json
-  command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+  services:
+    - id: 0
+      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
   health_check: python3 /root/scoring.py health
+
+scoring:
+  points_per_tick: 100
+  points_per_stolen_flag: 100
+  points_per_lost_flag: -100
 
 # Flags are valid for 1 second.
 flag_valid_time: 1s

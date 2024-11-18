@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 	"github.com/tinyrange/ad/pkg/htm"
@@ -13,6 +15,60 @@ import (
 	"github.com/tinyrange/ad/pkg/htm/htmx"
 	"github.com/tinyrange/ad/pkg/htm/xtermjs"
 )
+
+func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
+	game.scoreboardMtx.RLock()
+	defer game.scoreboardMtx.RUnlock()
+
+	scoreboard := game.OverallState
+
+	if scoreboard == nil {
+		return nil
+	}
+
+	var headerRow htm.Group
+	headerRow = append(headerRow, html.Text("#"))
+	headerRow = append(headerRow, html.Text("Name"))
+	headerRow = append(headerRow, html.Text("Points"))
+	for _, service := range game.Config.Vulnbox.Services {
+		headerRow = append(headerRow, html.Textf("%s Points", service.Name))
+		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name))
+		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name))
+		headerRow = append(headerRow, html.Textf("%s Defense Points", service.Name))
+		headerRow = append(headerRow, html.Textf("%s Uptime Points", service.Name))
+	}
+
+	var rows []htm.Group
+	for _, team := range scoreboard.Teams {
+		row := htm.Group{
+			html.Textf("%d", team.Position),
+			html.Textf("%s", team.Name),
+			html.Textf("%f", team.Points),
+		}
+
+		for _, service := range game.Config.Vulnbox.Services {
+			serviceState := team.Services[service.Id]
+			if serviceState == nil {
+				row = append(row, html.Text(""), html.Text(""), html.Text(""), html.Text(""), html.Text(""))
+			} else {
+				row = append(row,
+					html.Textf("%f", serviceState.Points),
+					html.Textf("%f", serviceState.TickPoints),
+					html.Textf("%f", serviceState.AttackPoints),
+					html.Textf("%f", serviceState.DefensePoints),
+					html.Textf("%f", serviceState.UptimePoints),
+				)
+			}
+		}
+
+		rows = append(rows, row)
+	}
+
+	return bootstrap.Table(
+		headerRow,
+		rows,
+	)
+}
 
 var upgrader = websocket.Upgrader{}
 
@@ -35,6 +91,7 @@ func (game *AttackDefenseGame) publicPageLayout(title string, body ...htm.Fragme
 		html.Body(
 			bootstrap.Navbar(
 				bootstrap.NavbarBrand("/", html.Text(game.Config.Title)),
+				bootstrap.NavbarLink("/scoreboard", html.Text("Scoreboard")),
 				bootstrap.NavbarLink("/instances", html.Text("Instances")),
 				bootstrap.NavbarLink("/events", html.Text("Events")),
 				bootstrap.NavbarLink("/devices", html.Text("Devices")),
@@ -218,6 +275,55 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		}
 
 		http.Redirect(w, r, "/devices", http.StatusFound)
+	})
+
+	// GET /scoreboard lists the scoreboard for the overall state.
+	handler.HandleFunc("GET /scoreboard", func(w http.ResponseWriter, r *http.Request) {
+		page := game.renderScoreboard()
+		if page == nil {
+			page = game.publicPageError(fmt.Errorf("game has not started"))
+		}
+
+		if err := htm.Render(r.Context(), w, game.publicPageLayout("Scoreboard", page)); err != nil {
+			slog.Error("failed to render page", "err", err)
+		}
+	})
+
+	// GET /api/scoreboard returns the scoreboard for the overall state.
+	handler.HandleFunc("GET /api/scoreboard", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		game.scoreboardMtx.RLock()
+		defer game.scoreboardMtx.RUnlock()
+
+		if err := json.NewEncoder(w).Encode(game.OverallState); err != nil {
+			slog.Error("failed to encode scoreboard", "err", err)
+		}
+	})
+
+	// GET /api/scoreboard/{tick} returns the scoreboard for a specific tick.
+	handler.HandleFunc("GET /api/scoreboard/{tick}", func(w http.ResponseWriter, r *http.Request) {
+		tickStr := r.PathValue("tick")
+
+		tick, err := strconv.Atoi(tickStr)
+		if err != nil {
+			http.Error(w, "invalid tick", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		game.scoreboardMtx.RLock()
+		defer game.scoreboardMtx.RUnlock()
+
+		if tick > len(game.Ticks) {
+			http.Error(w, "tick not found", http.StatusNotFound)
+			return
+		}
+
+		if err := json.NewEncoder(w).Encode(game.Ticks[tick-1]); err != nil {
+			slog.Error("failed to encode scoreboard", "err", err)
+		}
 	})
 
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
