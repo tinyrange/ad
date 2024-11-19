@@ -27,6 +27,14 @@ type Team struct {
 
 func (t *Team) BotId() int { return BOT_ID_OFFSET + t.ID }
 
+func (t *Team) GetSSHConfig() (SecureSSHConfig, error) {
+	if t.teamInstance == nil {
+		return SecureSSHConfig{}, fmt.Errorf("team instance not set")
+	}
+
+	return t.teamInstance.SecureConfig()
+}
+
 func (t *Team) InstanceId() string {
 	if t.teamInstance == nil {
 		return ""

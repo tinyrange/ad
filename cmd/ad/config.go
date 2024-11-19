@@ -1,7 +1,5 @@
 package main
 
-import "fmt"
-
 const CURRENT_CONFIG_VERSION = 1
 
 type ServiceConfig struct {
@@ -27,10 +25,6 @@ type BotConfig struct {
 	Enabled  bool     `yaml:"enabled"`
 	Template string   `yaml:"template"`
 	Events   EventMap `yaml:"events"`
-}
-
-func (b *BotConfig) Start() (*TinyRangeInstance, error) {
-	return nil, fmt.Errorf("BotConfig.Start not implemented")
 }
 
 type ScoringConfig struct {

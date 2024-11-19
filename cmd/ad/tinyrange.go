@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,17 +12,85 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 )
 
+type SecureSSHConfig struct {
+	HostKey   string `json:"ssh_host_key"`
+	PublicKey string `json:"ssh_public_key"`
+	Password  string `json:"ssh_password"`
+}
+
 type TinyRangeInstance struct {
-	game       *AttackDefenseGame
-	cmd        *exec.Cmd
-	name       string
-	instanceId string
+	mtx             sync.Mutex
+	game            *AttackDefenseGame
+	cmd             *exec.Cmd
+	name            string
+	instanceId      string
+	secureSSHPath   string
+	secureConfig    SecureSSHConfig
+	sshClientConfig *ssh.ClientConfig
+}
+
+func (t *TinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
+	if _, err := t.clientConfig(); err != nil {
+		return SecureSSHConfig{}, err
+	}
+
+	return t.secureConfig, nil
+}
+
+func (t *TinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
+	if t.sshClientConfig == nil {
+		if t.secureSSHPath == "" {
+			return nil, errors.New("secure ssh path not set")
+		}
+
+		// Wait for the secure SSH path to be created.
+		for {
+			if _, err := os.Stat(t.secureSSHPath); err == nil {
+				break
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Load the secure SSH config.
+
+		f, err := os.Open(t.secureSSHPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open secure ssh config: %w", err)
+		}
+		defer f.Close()
+
+		if err := json.NewDecoder(f).Decode(&t.secureConfig); err != nil {
+			return nil, fmt.Errorf("failed to decode secure ssh config: %w", err)
+		}
+
+		hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(t.secureConfig.PublicKey))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse host key: %w", err)
+		}
+
+		t.sshClientConfig = &ssh.ClientConfig{
+			User: "root",
+			Auth: []ssh.AuthMethod{
+				ssh.Password(t.secureConfig.Password),
+			},
+			HostKeyCallback: ssh.FixedHostKey(hostKey),
+		}
+
+		slog.Info("created ssh client config", "instance", t.instanceId)
+	}
+
+	return t.sshClientConfig, nil
 }
 
 func (t *TinyRangeInstance) Name() string {
@@ -40,7 +109,7 @@ func (t *TinyRangeInstance) DialContext(ctx context.Context, network, address st
 	return t.game.Router.DialContext(ctx, t.instanceId, network, address)
 }
 
-func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string) error {
+func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error {
 	// Load the template.
 	template, ok := t.game.getCachedTemplate(templateName)
 	if !ok {
@@ -50,7 +119,7 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 	args := []string{
 		t.game.TinyRangePath, "run-vm",
 		"--wireguard", wireguardConfigUrl,
-		"--debug",
+		"--secure-ssh", secureSSHPath,
 	}
 
 	if *verbose {
@@ -70,6 +139,7 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 
 	t.cmd = cmd
 	t.instanceId = instanceId
+	t.secureSSHPath = secureSSHPath
 
 	return nil
 }
@@ -91,15 +161,14 @@ func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (s
 	}
 	defer conn.Close()
 
+	config, err := t.clientConfig()
+	if err != nil {
+		return "", fmt.Errorf("failed to get client config: %w", err)
+	}
+
 	// The instance is listening on SSH on port 2222.
 	// Use the hardcoded password "insecurepassword" to login.
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, VM_SSH_IP_PORT, &ssh.ClientConfig{
-		User: "root",
-		Auth: []ssh.AuthMethod{
-			ssh.Password("insecurepassword"),
-		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	})
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, VM_SSH_IP_PORT, config)
 	if err != nil {
 		return "", fmt.Errorf("failed to create ssh client: %w", err)
 	}
@@ -163,12 +232,9 @@ var (
 )
 
 func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
-	config := &ssh.ClientConfig{
-		User: "root",
-		Auth: []ssh.AuthMethod{
-			ssh.Password("insecurepassword"),
-		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	config, err := t.clientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to get client config: %w", err)
 	}
 
 	var (
@@ -176,7 +242,6 @@ func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 		c     ssh.Conn
 		chans <-chan ssh.NewChannel
 		reqs  <-chan *ssh.Request
-		err   error
 	)
 
 	for {

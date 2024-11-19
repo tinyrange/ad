@@ -453,7 +453,12 @@ func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFi
 		name: name,
 	}
 
-	if err := inst.Start(templateFilename, instanceId, wireguardConfigUrl); err != nil {
+	secureSSHPath, err := game.Persist.EnsurePath("ssh", name)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := inst.Start(templateFilename, instanceId, wireguardConfigUrl, secureSSHPath); err != nil {
 		return nil, err
 	}
 
@@ -1000,6 +1005,7 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to start all teams: %w", err)
 	}
 
+	// Register flows for all devices.
 	for _, configKey := range configKeys {
 		if err := game.registerFlowsForDevice(configKey); err != nil {
 			return err

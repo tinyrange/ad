@@ -26,8 +26,18 @@ func (p *PersistDatabase) ValidateKey(key string) (string, error) {
 	return key, nil
 }
 
-func (p *PersistDatabase) getPath(group string, key string) string {
+func (p *PersistDatabase) GetPath(group string, key string) string {
 	return filepath.Join(p.persistDir, group, key)
+}
+
+func (p *PersistDatabase) EnsurePath(group string, key string) (string, error) {
+	path := p.GetPath(group, key)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+
+	return path, nil
 }
 
 func (p *PersistDatabase) ForEach(group string, cb func(key string, read func(value interface{}) error) error) error {
@@ -70,7 +80,7 @@ func (p *PersistDatabase) Set(group string, key string, value interface{}) error
 		return err
 	}
 
-	path := p.getPath(group, validKey)
+	path := p.GetPath(group, validKey)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -96,7 +106,7 @@ func (p *PersistDatabase) Get(group string, key string, value interface{}) error
 		return err
 	}
 
-	path := p.getPath(group, validKey)
+	path := p.GetPath(group, validKey)
 
 	f, err := os.Open(path)
 	if err != nil {

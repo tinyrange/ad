@@ -11,6 +11,7 @@ import (
 	"github.com/tinyrange/ad/pkg/htm/bootstrap"
 	"github.com/tinyrange/ad/pkg/htm/html"
 	"github.com/tinyrange/ad/pkg/htm/htmx"
+	"golang.org/x/crypto/ssh"
 )
 
 type serviceApiResponse struct {
@@ -47,6 +48,7 @@ func (game *AttackDefenseGame) privatePageLayout(title string, body ...htm.Fragm
 			bootstrap.Navbar(
 				bootstrap.NavbarBrand("/", html.Text(game.Config.Title)),
 				bootstrap.NavbarLink("/scoreboard", html.Text("Scoreboard")),
+				bootstrap.NavbarLink("/vulnbox", html.Text("Vulnbox")),
 			),
 			html.Div(bootstrap.Container, htm.Group(body)),
 		),
@@ -150,6 +152,46 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 		}
 
 		fmt.Fprintf(w, "%s\n", status)
+	})
+
+	// GET /vulnbox renders the vulnbox connection info.
+	game.privateServer.HandleFunc("GET /vulnbox", func(w http.ResponseWriter, r *http.Request) {
+		var teamList htm.Group
+
+		for _, team := range game.Teams {
+			secureConfig, err := team.GetSSHConfig()
+			if err != nil {
+				slog.Error("failed to get secure config", "err", err)
+				continue
+			}
+
+			publicKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(secureConfig.PublicKey))
+			if err != nil {
+				slog.Error("failed to parse public key", "err", err)
+				continue
+			}
+
+			teamList = append(teamList,
+				bootstrap.Card(
+					bootstrap.CardTitle(team.DisplayName),
+					html.P(html.Strong(htm.Text("SSH Command: ")), html.Code(html.Textf("ssh -p 2222 root@%s", team.IP()))),
+					bootstrap.Table(
+						nil,
+						[]htm.Group{
+							{htm.Text("IP"), html.Code(html.Textf("%s", team.IP()))},
+							{htm.Text("Port"), html.Code(html.Textf("%d", 2222))},
+							{htm.Text("Username"), html.Code(html.Textf("%s", "root"))},
+							{htm.Text("Password"), html.Code(html.Textf("%s", secureConfig.Password))},
+							{htm.Text("Fingerprint"), html.Code(html.Textf("%s", ssh.FingerprintSHA256(publicKey)))},
+						},
+					),
+				),
+			)
+		}
+
+		if err := htm.Render(r.Context(), w, game.privatePageLayout("Vulnbox", teamList)); err != nil {
+			slog.Error("failed to render page", "err", err)
+		}
 	})
 
 	// Add an API endpoint for getting a list of team IPs.
