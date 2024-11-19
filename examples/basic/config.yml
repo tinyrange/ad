@@ -4,25 +4,30 @@ title: "Basic Example"
 
 vulnbox:
   template: vulnbox/vulnbox.yml
+  
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
+  
   services:
     - id: 0
       name: "hello"
       port: 5000
 
-bots:
-  enabled: true
-  template: vulnbox/bot.yml
-  events:
-    vuln1:
-      command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+  bot:
+    enabled: true
+    template: vulnbox/bot.yml
+    events:
+      vuln1:
+        command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
 
 scorebot:
   template: scorebot/scorebot.yml
+  
   config_file: game.json
+  
   services:
     - id: 0
       command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+  
   health_check: python3 /root/scoring.py health
 
 scoring:

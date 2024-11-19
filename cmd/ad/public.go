@@ -18,7 +18,23 @@ import (
 	"github.com/tinyrange/ad/pkg/htm/html"
 	"github.com/tinyrange/ad/pkg/htm/htmx"
 	"github.com/tinyrange/ad/pkg/htm/xtermjs"
+	"gopkg.in/yaml.v3"
 )
+
+func (game *AttackDefenseGame) isAdmin(r *http.Request) bool {
+	return true
+}
+
+func (game *AttackDefenseGame) checkForAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if !game.isAdmin(r) {
+		slog.Warn("attempted to access admin page without permission", "ip", r.RemoteAddr, "path", r.URL.Path)
+
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+
+	return true
+}
 
 func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 	game.scoreboardMtx.RLock()
@@ -121,6 +137,7 @@ func (game *AttackDefenseGame) publicPageLayout(title string, body ...htm.Fragme
 				bootstrap.NavbarLink("/instances", html.Text("Instances")),
 				bootstrap.NavbarLink("/events", html.Text("Events")),
 				bootstrap.NavbarLink("/devices", html.Text("Devices")),
+				bootstrap.NavbarLink("/config", html.Text("Config")),
 			),
 			html.Div(bootstrap.Container, htm.Group(body)),
 		),
@@ -149,6 +166,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// GET /instances lists all running TinyRange instances and provides a button to SSH via WebSSH.
 	handler.HandleFunc("GET /instances", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		instances := game.getInstances()
 
 		var instanceList []htm.Fragment
@@ -171,6 +192,11 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// GET /connect/{instance} provides a WebSSH terminal to the instance.
 	handler.HandleFunc("GET /connect/{instance}", func(w http.ResponseWriter, r *http.Request) {
+		// TODO(joshua): Allow teams to connect to their own instances.
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		instanceId := r.PathValue("instance")
 
 		if _, err := game.getInstance(instanceId); err != nil {
@@ -199,6 +225,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// /api/connect/{instance} provides a WebSocket connection to the instance.
 	handler.HandleFunc("/api/connect/{instance}", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		instanceId := r.PathValue("instance")
 
 		instance, err := game.getInstance(instanceId)
@@ -221,6 +251,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 	})
 
 	handler.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		events := game.GetEvents()
 
 		var eventList []htm.Fragment
@@ -247,6 +281,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// POST /event runs an event by name.
 	handler.HandleFunc("POST /api/event", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		name := r.FormValue("name")
 
 		if err := game.RunEvent(name); err != nil {
@@ -262,6 +300,11 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// GET /devices lists all devices and their WireGuard configuration and a button to add a new device.
 	handler.HandleFunc("GET /devices", func(w http.ResponseWriter, r *http.Request) {
+		// TODO(joshua): Allow teams to add their own instances.
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		devices := game.GetDevices()
 
 		var deviceList []htm.Fragment
@@ -292,6 +335,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 	// POST /api/device adds a new device.
 	handler.HandleFunc("POST /api/device", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
 		name := r.FormValue("name")
 
 		if name == "" {
@@ -310,6 +357,39 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		}
 
 		http.Redirect(w, r, "/devices", http.StatusFound)
+	})
+
+	// GET /config lists the current YAML configuration and provides a button to download it.
+	handler.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
+		config, err := yaml.Marshal(&game.Config)
+		if err != nil {
+			slog.Error("failed to marshal config", "err", err)
+			http.Error(w, "failed to marshal config", http.StatusInternalServerError)
+			return
+		}
+
+		if err := htm.Render(r.Context(), w, game.publicPageLayout("Config", html.Pre(html.Code(html.Textf("%s", config))))); err != nil {
+			slog.Error("failed to render page", "err", err)
+		}
+	})
+
+	// GET /api/config downloads the current YAML configuration.
+	handler.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		if !game.checkForAdmin(w, r) {
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/yaml")
+
+		if err := yaml.NewEncoder(w).Encode(&game.Config); err != nil {
+			slog.Error("failed to encode config", "err", err)
+			http.Error(w, "failed to encode config", http.StatusInternalServerError)
+			return
+		}
 	})
 
 	// GET /scoreboard lists the scoreboard for the overall state.

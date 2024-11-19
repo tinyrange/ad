@@ -82,7 +82,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			teamList = append(teamList, row)
 
 			// TODO(joshua): Only add the bot if this is our own team.
-			if game.Config.Bots.Enabled {
+			if game.Config.Vulnbox.Bot.Enabled {
 				row := htm.Group{
 					htm.Text(team.DisplayName + " Bot"),
 					htm.Text(team.BotIP()),

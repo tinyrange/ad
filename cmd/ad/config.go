@@ -14,6 +14,7 @@ type VulnboxConfig struct {
 	Template     string          `yaml:"template"`
 	InitTemplate string          `yaml:"init"`
 	Services     []ServiceConfig `yaml:"services"`
+	Bot          BotConfig       `yaml:"bot"`
 }
 
 type EventDefinition struct {
@@ -64,7 +65,6 @@ type Config struct {
 	Wait          bool                  `yaml:"wait"`
 	WaitAfter     bool                  `yaml:"wait_after"`
 	Vulnbox       VulnboxConfig         `yaml:"vulnbox"`
-	Bots          BotConfig             `yaml:"bots"`
 	ScoreBot      ScoreBotConfig        `yaml:"scorebot"`
 	TickRate      Duration              `yaml:"tick_rate"`
 	Duration      Duration              `yaml:"duration"`

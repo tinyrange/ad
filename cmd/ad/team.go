@@ -164,8 +164,8 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	}
 
 	// If there is a bot, start the bot instance.
-	if game.Config.Bots.Enabled {
-		inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName+"_bot", game.Config.Bots.Template)
+	if game.Config.Vulnbox.Bot.Enabled {
+		inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName+"_bot", game.Config.Vulnbox.Bot.Template)
 		if err != nil {
 			return err
 		}

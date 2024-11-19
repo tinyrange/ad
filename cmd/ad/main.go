@@ -120,11 +120,11 @@ func appMain() error {
 	}
 
 	if *wait {
-		config.Wait = true
+		game.Config.Wait = true
 	}
 
 	if *waitAfter {
-		config.WaitAfter = true
+		game.Config.WaitAfter = true
 	}
 
 	for _, team := range opTeam {

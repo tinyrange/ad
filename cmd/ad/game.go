@@ -268,7 +268,7 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 		}
 
 		// TODO: Check if the device belongs to a bot.
-		if game.Config.Bots.Enabled {
+		if game.Config.Vulnbox.Bot.Enabled {
 			for _, service := range game.Config.Vulnbox.Services {
 				// Connect the device to the bot machine.
 				if err := game.Router.AddSimpleForwarder(
@@ -511,7 +511,7 @@ func (game *AttackDefenseGame) ForAllTeams(includeBots bool, f func(t *Team, inf
 			}
 		}(team)
 
-		if includeBots && game.Config.Bots.Enabled {
+		if includeBots && game.Config.Vulnbox.Bot.Enabled {
 			wg.Add(1)
 
 			go func(team *Team) {
@@ -668,7 +668,7 @@ func (game *AttackDefenseGame) updateScoreboard() error {
 		// Add the team to the current state.
 		game.CurrentState.Teams[team.ID] = teamState
 
-		if game.Config.Bots.Enabled {
+		if game.Config.Vulnbox.Bot.Enabled {
 			// Add the bot to the current state.
 			botState := &TeamState{
 				IsBot: true,
@@ -766,7 +766,7 @@ func (game *AttackDefenseGame) Tick() error {
 
 	dur := time.Since(start)
 
-	if dur > game.Config.TickRate.Duration {
+	if dur > game.scaleDuration(game.Config.TickRate.Duration) {
 		slog.Warn("tick took too long", "duration", dur)
 	}
 
@@ -934,8 +934,8 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Register events for the game.
-	if game.Config.Bots.Enabled {
-		for name, ev := range game.Config.Bots.Events {
+	if game.Config.Vulnbox.Bot.Enabled {
+		for name, ev := range game.Config.Vulnbox.Bot.Events {
 			game.AddEvent(fmt.Sprintf("bot/%s", name), func(game *AttackDefenseGame) error {
 				return game.ForAllTeams(false, func(t *Team, info TargetInfo) error {
 					return t.runBotCommand(game, t.Info(), t.BotInfo(), ev.Command)
