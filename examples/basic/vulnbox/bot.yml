@@ -10,3 +10,4 @@ packages:
     - py3-requests
     - openrc
     - curl
+init: /sbin/init

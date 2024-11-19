@@ -8,3 +8,4 @@ packages:
     - py3-flask
     - openrc
     - curl
+init: /sbin/init
