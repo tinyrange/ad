@@ -48,7 +48,7 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 	}
 
 	args := []string{
-		t.game.Config.TinyRange.Path, "run-vm",
+		t.game.TinyRangePath, "run-vm",
 		"--wireguard", wireguardConfigUrl,
 		"--debug",
 	}

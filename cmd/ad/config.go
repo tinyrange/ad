@@ -4,19 +4,6 @@ import "fmt"
 
 const CURRENT_CONFIG_VERSION = 1
 
-type TinyRangeConfig struct {
-	Path string `yaml:"path"`
-}
-
-type FrontendConfig struct {
-	Address string `yaml:"address"`
-	Port    int    `yaml:"port"`
-}
-
-func (f *FrontendConfig) Url() string {
-	return fmt.Sprintf("http://%s:%d", f.Address, f.Port)
-}
-
 type ServiceConfig struct {
 	Id   int    `yaml:"id"`
 	Name string `yaml:"name"`
@@ -64,21 +51,25 @@ func (tl *TimelineEvent) Run(game *AttackDefenseGame) error {
 	return game.RunEvent(tl.Event)
 }
 
+type PageConfig struct {
+	Path  string `yaml:"path"`
+	Title string `yaml:"title"`
+}
+
 type Config struct {
 	basePath string
 
-	Version       int             `yaml:"version"`
-	Title         string          `yaml:"title"`
-	Wait          bool            `yaml:"wait"`
-	WaitAfter     bool            `yaml:"wait_after"`
-	TinyRange     TinyRangeConfig `yaml:"tinyrange"`
-	Frontend      FrontendConfig  `yaml:"frontend"`
-	Vulnbox       VulnboxConfig   `yaml:"vulnbox"`
-	Bots          BotConfig       `yaml:"bots"`
-	ScoreBot      ScoreBotConfig  `yaml:"scorebot"`
-	TickRate      Duration        `yaml:"tick_rate"`
-	Duration      Duration        `yaml:"duration"`
-	FlagValidTime Duration        `yaml:"flag_valid_time"`
-	Scoring       ScoringConfig   `yaml:"scoring"`
-	Timeline      []TimelineEvent `yaml:"timeline"`
+	Version       int                   `yaml:"version"`
+	Title         string                `yaml:"title"`
+	Wait          bool                  `yaml:"wait"`
+	WaitAfter     bool                  `yaml:"wait_after"`
+	Vulnbox       VulnboxConfig         `yaml:"vulnbox"`
+	Bots          BotConfig             `yaml:"bots"`
+	ScoreBot      ScoreBotConfig        `yaml:"scorebot"`
+	TickRate      Duration              `yaml:"tick_rate"`
+	Duration      Duration              `yaml:"duration"`
+	FlagValidTime Duration              `yaml:"flag_valid_time"`
+	Scoring       ScoringConfig         `yaml:"scoring"`
+	Timeline      []TimelineEvent       `yaml:"timeline"`
+	Pages         map[string]PageConfig `yaml:"pages"`
 }

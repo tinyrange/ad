@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 
+	"github.com/gomarkdown/markdown"
+	htmlMd "github.com/gomarkdown/markdown/html"
 	"github.com/gorilla/websocket"
 	"github.com/tinyrange/ad/pkg/htm"
 	"github.com/tinyrange/ad/pkg/htm/bootstrap"
@@ -70,6 +74,28 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 	)
 }
 
+func (game *AttackDefenseGame) renderPage(ctx context.Context, path string) (htm.Fragment, error) {
+	page, ok := game.Config.Pages[path]
+	if !ok {
+		return nil, nil
+	}
+
+	pagePath := game.ResolvePath(page.Path)
+
+	pageContent, err := os.ReadFile(pagePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read page: %w", err)
+	}
+
+	doc := markdown.Parse(pageContent, nil)
+
+	renderer := htmlMd.NewRenderer(htmlMd.RendererOptions{})
+
+	body := markdown.Render(doc, renderer)
+
+	return htm.UnsafeRawHTML(body), nil
+}
+
 var upgrader = websocket.Upgrader{}
 
 func (game *AttackDefenseGame) publicPageError(err error) htm.Fragment {
@@ -105,7 +131,16 @@ func (game *AttackDefenseGame) startPublicServer() error {
 	handler := http.NewServeMux()
 
 	handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		page := game.publicPageLayout("Home")
+		body, err := game.renderPage(r.Context(), "/")
+		if err != nil {
+			slog.Error("failed to render page", "err", err)
+			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+			return
+		}
+
+		page := game.publicPageLayout("Home", body)
 
 		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
@@ -326,20 +361,45 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		}
 	})
 
+	for path, pageInfo := range game.Config.Pages {
+		if path == "/" {
+			continue
+		}
+
+		handler.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			body, err := game.renderPage(r.Context(), path)
+			if err != nil {
+				slog.Error("failed to render page", "err", err)
+				if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
+					slog.Error("failed to render page", "err", err)
+				}
+				return
+			}
+
+			page := game.publicPageLayout(pageInfo.Title, body)
+
+			if err := htm.Render(r.Context(), w, page); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+		})
+	}
+
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
 	game.Router.registerMux(handler)
 
+	publicAddr := fmt.Sprintf("%s:%d", game.PublicIP, game.PublicPort)
+
 	game.publicServer = &http.Server{
-		Addr:    game.Config.Frontend.Address,
+		Addr:    publicAddr,
 		Handler: handler,
 	}
 
-	listener, err := net.Listen("tcp", game.Config.Frontend.Address+":"+fmt.Sprint(game.Config.Frontend.Port))
+	listener, err := net.Listen("tcp", publicAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}
 
-	slog.Info("public server listening", "url", fmt.Sprintf(" http://%s:%d", game.Config.Frontend.Address, game.Config.Frontend.Port))
+	slog.Info("public server listening", "url", " "+game.FrontendUrl())
 
 	go func() {
 		if err := game.publicServer.Serve(listener); err != nil {

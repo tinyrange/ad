@@ -78,6 +78,15 @@ type AttackDefenseGame struct {
 	// Config is the configuration for the game.
 	Config Config
 
+	// TinyRangePath is the path to the tinyrange binary.
+	TinyRangePath string
+
+	// PublicIP is the public IP of the game.
+	PublicIP string
+
+	// PublicPort is the port used for the frontend of the game.
+	PublicPort int
+
 	// Signer is the signer for the game.
 	Signer *Signer
 
@@ -129,6 +138,10 @@ type AttackDefenseGame struct {
 	privateServer *http.ServeMux
 
 	rebuildTemplates bool
+}
+
+func (game *AttackDefenseGame) FrontendUrl() string {
+	return fmt.Sprintf("http://%s:%d", game.PublicIP, game.PublicPort)
 }
 
 func (game *AttackDefenseGame) ScoreBotInstance() string {
@@ -338,7 +351,7 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 	resolvedFilename := game.ResolvePath(templateFilename)
 
 	args := []string{
-		game.Config.TinyRange.Path, "login",
+		game.TinyRangePath, "login",
 		"--template",
 		"--load-config", resolvedFilename,
 	}
@@ -899,8 +912,8 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	game.Router = &WireguardRouter{
-		serverUrl:     game.Config.Frontend.Url(),
-		publicAddress: game.Config.Frontend.Address,
+		serverUrl:     game.FrontendUrl(),
+		publicAddress: game.PublicIP,
 		endpoints:     make(map[string]*wireguardInstance),
 	}
 

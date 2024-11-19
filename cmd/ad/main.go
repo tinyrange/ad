@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/pprof"
 	"strings"
@@ -37,7 +38,8 @@ var (
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
 	waitAfter        = flag.Bool("wait-after", false, "Keep services up after the game is complete.")
-	publicIp         = flag.String("ip", "", "The public IP of the server.")
+	publicIp         = flag.String("ip", "127.0.0.1", "The public IP of the server.")
+	publicPort       = flag.Int("port", 5100, "The public port of the server.")
 	persistancePath  = flag.String("persist-path", "local/persist", "The path to the config file.")
 )
 
@@ -93,22 +95,6 @@ func appMain() error {
 		return fmt.Errorf("mismatched version: %d != %d", config.Version, CURRENT_CONFIG_VERSION)
 	}
 
-	if *tinyrangePath != "" {
-		config.TinyRange.Path = *tinyrangePath
-	}
-
-	if *wait {
-		config.Wait = true
-	}
-
-	if *waitAfter {
-		config.WaitAfter = true
-	}
-
-	if *publicIp != "" {
-		config.Frontend.Address = *publicIp
-	}
-
 	game := &AttackDefenseGame{
 		Persist:            NewPersistDatabase(persistDir),
 		Config:             config,
@@ -118,6 +104,27 @@ func appMain() error {
 		SshServerHostKey:   *sshServerHostKey,
 		TimeScale:          *timeScale,
 		rebuildTemplates:   *rebuild,
+		PublicIP:           *publicIp,
+		PublicPort:         *publicPort,
+	}
+
+	if *tinyrangePath != "" {
+		game.TinyRangePath = *tinyrangePath
+	} else {
+		tinyrange, err := exec.LookPath("tinyrange")
+		if err != nil {
+			return fmt.Errorf("tinyrange not found in PATH")
+		}
+
+		game.TinyRangePath = tinyrange
+	}
+
+	if *wait {
+		config.Wait = true
+	}
+
+	if *waitAfter {
+		config.WaitAfter = true
 	}
 
 	for _, team := range opTeam {

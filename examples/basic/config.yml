@@ -2,13 +2,6 @@ version: 1
 
 title: "Basic Example"
 
-tinyrange:
-  path: tinyrange
-
-frontend:
-  address: "127.0.0.1"
-  port: 5100
-
 vulnbox:
   template: vulnbox/vulnbox.yml
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
@@ -53,3 +46,10 @@ timeline:
   #   event: network/open
   # - at: 25s
   #   event: scoreboard/freeze
+
+pages:
+  "/":
+    path: pages/index.md
+  "/rules":
+    title: "Rules"
+    path: pages/rules.md
