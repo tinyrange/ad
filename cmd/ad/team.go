@@ -149,7 +149,7 @@ func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error 
 		resp, err = t.botInstance.RunCommand(buf.String(), 10*time.Second)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to run init command(%w): %s", err, resp)
+		return fmt.Errorf("failed to run init command: %w %s", err, resp)
 	}
 
 	if strings.Trim(resp, " \n") != "success" {
@@ -168,7 +168,7 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	t.teamInstance = inst
 
 	if err := game.registerFlowsForTeam(t, t.Info()); err != nil {
-		return err
+		return fmt.Errorf("failed to register flows for team (%d): %w", t.ID, err)
 	}
 
 	// If there is a bot, start the bot instance.
@@ -180,7 +180,7 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		t.botInstance = inst
 
 		if err := game.registerFlowsForTeam(t, t.BotInfo()); err != nil {
-			return err
+			return fmt.Errorf("failed to register flows for team bot (%d): %w", t.ID, err)
 		}
 
 		// Open the bot to the team.

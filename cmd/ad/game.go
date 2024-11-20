@@ -1102,6 +1102,19 @@ func (game *AttackDefenseGame) AddDevice(name string) error {
 		return err
 	}
 
+	// Add the internal HTTP router.
+	internalWeb, err := game.Router.AddListener(deviceInstance, INTERNAL_WEB_IP_PORT)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Serve the request.
+			game.privateServer.ServeHTTP(w, r)
+		}))
+	}()
+
 	return nil
 }
 

@@ -397,9 +397,11 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		page := game.renderScoreboard()
 		if page == nil {
 			page = game.publicPageError(fmt.Errorf("game has not started"))
+		} else {
+			page = game.publicPageLayout("Scoreboard", page)
 		}
 
-		if err := htm.Render(r.Context(), w, game.publicPageLayout("Scoreboard", page)); err != nil {
+		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
 		}
 	})

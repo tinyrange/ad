@@ -203,7 +203,12 @@ func (r *WireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	// Set the content type to plain text
 	w.Header().Set("Content-Type", "text/plain")
+
+	// Set the file to download and set a filename
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", instanceId))
+
 	w.Write([]byte(instance.peerConfig))
 }
 
