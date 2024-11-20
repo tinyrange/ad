@@ -28,7 +28,7 @@ func (i *arrayFlags) Set(value string) error {
 
 var (
 	configFile       = flag.String("config", "", "The config file to start the Attack/Defense server with.")
-	opTeam           arrayFlags
+	nopTeam          arrayFlags
 	tinyrangePath    = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
 	verbose          = flag.Bool("verbose", false, "Enable verbose logging.")
 	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
@@ -44,7 +44,7 @@ var (
 )
 
 func appMain() error {
-	flag.Var(&opTeam, "op-team", "Create a team with no player attached.")
+	flag.Var(&nopTeam, "nop-team", "Create a team with no player attached.")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -127,7 +127,7 @@ func appMain() error {
 		game.Config.WaitAfter = true
 	}
 
-	for _, team := range opTeam {
+	for _, team := range nopTeam {
 		game.AddTeam(team)
 	}
 
