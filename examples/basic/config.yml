@@ -2,32 +2,84 @@ version: 1
 
 title: "Basic Example"
 
+# Configure the vulnbox.
 vulnbox:
+  # The template is a TinyRange configuration file that describes the vulnbox.
   template: vulnbox/vulnbox.yml
   
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
   
   services:
     - id: 0
-      name: "hello"
+      name: "Hello"
       port: 5000
+      tags:
+        - public
+    - id: 1
+      name: "Private SSH"
+      port: 2222
+      private: true
+      tags:
+        - private
+
+  tags:
+    - team/{team}
+
+  # Flows is a list of outgoing flows the machine can connect to.
+  # All machines implicitly have the public/*:public flow.
+  flows:
+    - team/*:public
+    - bot/{team}:public
+    - device/{team}:public
 
   bot:
+    # Bots inherit the services of the vulnbox.
     enabled: true
+    
     template: vulnbox/bot.yml
+
+    # Bots can have events that are triggered by the timeline.
     events:
       vuln1:
         command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+
+    # Bots are not tagged the same as regular teams so they can't be targeted except explicitly by their own team.
+    tags:
+      - bot/{team}
+    
+    # Bots can only connect to their own team.
+    flows:
+      - team/{team}:public
+
+# Devices are externally joined machines.
+device:
+  tags:
+    - device/{team}
+
+  flows:
+    - team/*:public
+    - team/{team}:private
+    - bot/{team}:public
 
 scorebot:
   template: scorebot/scorebot.yml
   
   config_file: game.json
   
+  # Services is a list of services to check.
   services:
     - id: 0
       command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+
+  tags:
+    - scorebot/scorebot
+
+  # Generally the scorebot only needs to connect to the teams and the bots.
+  flows:
+    - team/*:public
+    - bot/*:public # The scorebot has access to all bots.
   
+  # The health check is run after the scorebot is started.
   health_check: python3 /root/scoring.py health
 
 scoring:
