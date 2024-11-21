@@ -67,6 +67,7 @@ type WireguardDevice struct {
 type WireguardRouter struct {
 	mtx           sync.Mutex
 	publicAddress string
+	mtu           int
 	serverUrl     string
 	endpoints     map[string]*wireguardInstance
 }
@@ -147,7 +148,7 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 
 	slog.Info("adding wireguard endpoint", "instance", instanceId)
 
-	wg, err := wireguard.NewServer(HOST_IP)
+	wg, err := wireguard.NewServer(HOST_IP, r.mtu)
 	if err != nil {
 		return "", err
 	}
@@ -291,25 +292,27 @@ func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, p
 		config = fmt.Sprintf(`[Interface]
 Address = %s
 PrivateKey = %s
+MTU = %d
 
 [Peer]
 PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s
 `,
-			instance.DeviceIP(), privateKey, publicKey, endpoint,
+			instance.DeviceIP(), privateKey, r.mtu, publicKey, endpoint,
 		)
 	} else {
 		config = fmt.Sprintf(`[Interface]
 Address = %s
 PrivateKey = %s
+MTU = %d
 
 [Peer]
 PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s:%s
 `,
-			instance.DeviceIP(), privateKey, publicKey, r.publicAddress, listenPort,
+			instance.DeviceIP(), privateKey, r.mtu, publicKey, r.publicAddress, listenPort,
 		)
 	}
 
@@ -329,7 +332,7 @@ func (r *WireguardRouter) AddDevice(name string) (instanceId string, config stri
 
 	id = len(r.endpoints)
 
-	wg, err := wireguard.NewServer(HOST_IP)
+	wg, err := wireguard.NewServer(HOST_IP, r.mtu)
 	if err != nil {
 		return "", "", -1, err
 	}
@@ -393,7 +396,7 @@ func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error 
 		return err
 	}
 
-	wg, err := wireguard.NewFromConfig(HOST_IP, newConfig)
+	wg, err := wireguard.NewFromConfig(HOST_IP, r.mtu, newConfig)
 	if err != nil {
 		return err
 	}

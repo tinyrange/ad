@@ -111,6 +111,9 @@ type AttackDefenseGame struct {
 	// Router is the wireguard router for the game.
 	Router *WireguardRouter
 
+	// RouterMTU is the MTU(Maximum Transmission Unit) for the router.
+	RouterMTU int
+
 	templateMutex sync.Mutex
 	// TinyRangeTemplates is a map of tinyrange templates that are already cached.
 	// It points to the VM config filename.
@@ -916,9 +919,14 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to generate keys: %w", err)
 	}
 
+	if game.RouterMTU == 0 {
+		game.RouterMTU = 1420
+	}
+
 	game.Router = &WireguardRouter{
 		serverUrl:     game.FrontendUrl(),
 		publicAddress: game.PublicIP,
+		mtu:           game.RouterMTU,
 		endpoints:     make(map[string]*wireguardInstance),
 	}
 

@@ -41,6 +41,7 @@ var (
 	publicIp         = flag.String("ip", "127.0.0.1", "The public IP of the server.")
 	publicPort       = flag.Int("port", 5100, "The public port of the server.")
 	persistancePath  = flag.String("persist-path", "local/persist", "The path to the config file.")
+	routerMTU        = flag.Int("router-mtu", 1420, "The MTU of the router.")
 )
 
 func appMain() error {
@@ -106,6 +107,7 @@ func appMain() error {
 		rebuildTemplates:   *rebuild,
 		PublicIP:           *publicIp,
 		PublicPort:         *publicPort,
+		RouterMTU:          *routerMTU,
 	}
 
 	if *tinyrangePath != "" {
