@@ -314,7 +314,9 @@ func (game *AttackDefenseGame) startPublicServer() error {
 				bootstrap.Card(
 					bootstrap.CardTitle(device.Name),
 					html.Div(html.Strong(html.Text("IP Adddress:")), html.Textf("%s", device.IP)),
-					bootstrap.LinkButton("/wireguard/"+device.ConfigKey, bootstrap.ButtonColorPrimary, html.Text("Download Config")),
+					html.Div(
+						html.Pre(html.Code(html.Textf("%s", device.Config))),
+					),
 				),
 			))
 		}

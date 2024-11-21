@@ -57,6 +57,7 @@ type DeviceConfig struct {
 
 type WireguardDevice struct {
 	ConfigKey string
+	Config    string
 	ID        int
 	Name      string
 	IP        string
@@ -207,9 +208,11 @@ func (r *WireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) 
 	w.Header().Set("Content-Type", "text/plain")
 
 	// Set the file to download and set a filename
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", instanceId))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", strings.ReplaceAll(instance.name, "-", "_")))
 
-	w.Write([]byte(instance.peerConfig))
+	if _, err := w.Write([]byte(instance.peerConfig)); err != nil {
+		slog.Error("failed to write config", "err", err)
+	}
 }
 
 func (r *WireguardRouter) registerMux(mux *http.ServeMux) {
@@ -229,6 +232,7 @@ func (r *WireguardRouter) GetDevices() []WireguardDevice {
 
 		devices = append(devices, WireguardDevice{
 			ConfigKey: instanceId,
+			Config:    instance.peerConfig,
 			ID:        instance.deviceId,
 			Name:      instance.name,
 			IP:        instance.DeviceIP(),
@@ -243,6 +247,7 @@ func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, p
 		privateKey string
 		publicKey  string
 		endpoint   string
+		listenPort string
 	)
 
 	for _, line := range strings.Split(peerConfig, "\n") {
@@ -261,6 +266,8 @@ func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, p
 			publicKey = v
 		case "endpoint":
 			endpoint = v
+		case "listen_port":
+			listenPort = v
 		}
 	}
 
@@ -279,7 +286,9 @@ func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, p
 
 	publicKey = base64.StdEncoding.EncodeToString(publicKeyBytes)
 
-	config := fmt.Sprintf(`[Interface]
+	var config string
+	if listenPort == "" {
+		config = fmt.Sprintf(`[Interface]
 Address = %s
 PrivateKey = %s
 
@@ -288,8 +297,21 @@ PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s
 `,
-		instance.DeviceIP(), privateKey, publicKey, endpoint,
-	)
+			instance.DeviceIP(), privateKey, publicKey, endpoint,
+		)
+	} else {
+		config = fmt.Sprintf(`[Interface]
+Address = %s
+PrivateKey = %s
+
+[Peer]
+PublicKey = %s
+AllowedIPs = 10.40.0.0/16
+Endpoint = %s:%s
+`,
+			instance.DeviceIP(), privateKey, publicKey, r.publicAddress, listenPort,
+		)
+	}
 
 	return config, nil
 }
@@ -376,12 +398,21 @@ func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error 
 		return err
 	}
 
-	r.endpoints[config.ConfigKey] = &wireguardInstance{
+	inst := &wireguardInstance{
 		wg:       wg,
 		isDevice: true,
 		deviceId: config.ID,
 		name:     name,
 	}
+
+	deviceConfig, err := r.translateToDeviceConfig(inst, config.Config)
+	if err != nil {
+		return err
+	}
+
+	r.endpoints[config.ConfigKey] = inst
+
+	inst.peerConfig = deviceConfig
 
 	return nil
 }
