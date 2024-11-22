@@ -95,6 +95,7 @@ type Config struct {
 	Wait          bool                  `yaml:"wait"`
 	WaitAfter     bool                  `yaml:"wait_after"`
 	Vulnbox       VulnboxConfig         `yaml:"vulnbox"`
+	Device        DeviceGlobalConfig    `yaml:"device"`
 	ScoreBot      ScoreBotConfig        `yaml:"scorebot"`
 	TickRate      Duration              `yaml:"tick_rate"`
 	Duration      Duration              `yaml:"duration"`

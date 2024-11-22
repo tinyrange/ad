@@ -153,11 +153,11 @@ func (r *FlowRouter) handleConnection(source FlowInstance, target FlowInstance, 
 }
 
 func (r *FlowRouter) AddInstance(instance FlowInstance) (wireguard.NetHandler, error) {
-	if _, ok := r.instances[instance.InstanceId()]; ok {
-		return nil, fmt.Errorf("instance already exists: %s", instance.InstanceId())
+	if _, ok := r.instances[instance.Hostname()]; ok {
+		return nil, fmt.Errorf("instance already exists: %s", instance.Hostname())
 	}
 
-	r.instances[instance.InstanceId()] = instance
+	r.instances[instance.Hostname()] = instance
 
 	return flowRouterHandler(func(network string, ip net.IP, port uint16, conn net.Conn) {
 		// find the target by IP

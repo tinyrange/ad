@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -28,19 +27,6 @@ var (
 )
 
 type CONTEXT_KEY string
-
-var (
-	CONTEXT_KEY_TEAM = CONTEXT_KEY("team")
-)
-
-func GetInfo(ctx context.Context) *TargetInfo {
-	t, ok := ctx.Value(CONTEXT_KEY_TEAM).(TargetInfo)
-	if !ok {
-		return nil
-	}
-
-	return &t
-}
 
 type Duration struct {
 	time.Duration

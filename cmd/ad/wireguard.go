@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"github.com/tinyrange/wireguard"
 )
@@ -50,20 +49,6 @@ func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) er
 	return nil
 }
 
-type DeviceConfig struct {
-	ConfigKey string
-	Config    string
-	ID        int
-}
-
-type WireguardDevice struct {
-	ConfigKey string
-	Config    string
-	ID        int
-	Name      string
-	IP        string
-}
-
 type WireguardRouter interface {
 	AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error
 	AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error
@@ -72,7 +57,7 @@ type WireguardRouter interface {
 	DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error)
 
 	AddEndpoint(instanceId string) (string, error)
-	AddDevice(name string) (instanceId string, config string, id int, err error)
+	AddDevice(instanceId string, name string) (config string, id int, err error)
 	RestoreDevice(name string, config DeviceConfig) error
 	GetDevices() []WireguardDevice
 
@@ -337,23 +322,16 @@ Endpoint = %s:%s
 	return config, nil
 }
 
-func (r *wireguardRouter) AddDevice(name string) (instanceId string, config string, id int, err error) {
+func (r *wireguardRouter) AddDevice(instanceId string, name string) (config string, id int, err error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-
-	instanceUuid, err := uuid.NewRandom()
-	if err != nil {
-		return "", "", -1, err
-	}
-
-	instanceId = instanceUuid.String()
 
 	id = len(r.endpoints)
 
 	handler := wireguard.NewSimpleFlowHandler()
 	wg, err := wireguard.NewServer(HOST_IP, r.mtu, handler)
 	if err != nil {
-		return "", "", -1, err
+		return "", -1, err
 	}
 
 	r.endpoints[instanceId] = &wireguardInstance{
@@ -366,19 +344,19 @@ func (r *wireguardRouter) AddDevice(name string) (instanceId string, config stri
 
 	peerConfig, err := wg.CreatePeer(r.publicAddress)
 	if err != nil {
-		return "", "", -1, err
+		return "", -1, err
 	}
 
 	deviceConfig, err := r.translateToDeviceConfig(r.endpoints[instanceId], peerConfig)
 	if err != nil {
-		return "", "", -1, err
+		return "", -1, err
 	}
 
 	r.endpoints[instanceId].peerConfig = deviceConfig
 
 	config, err = wg.GetConfig()
 	if err != nil {
-		return "", "", -1, err
+		return "", -1, err
 	}
 
 	return

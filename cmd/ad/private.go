@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,19 @@ import (
 	"github.com/tinyrange/ad/pkg/htm/htmx"
 	"golang.org/x/crypto/ssh"
 )
+
+var (
+	CONTEXT_KEY_TEAM = CONTEXT_KEY("team")
+)
+
+func GetInfo(ctx context.Context) *TargetInfo {
+	t, ok := ctx.Value(CONTEXT_KEY_TEAM).(TargetInfo)
+	if !ok {
+		return nil
+	}
+
+	return &t
+}
 
 type serviceApiResponse struct {
 	Id   int    `json:"id"`

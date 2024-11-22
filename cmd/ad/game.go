@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
 )
@@ -140,6 +141,39 @@ type AttackDefenseGame struct {
 	privateServer *http.ServeMux
 
 	rebuildTemplates bool
+
+	// internal services
+	internalWeb    *hostService
+	flagSubmission *hostService
+}
+
+// Flows implements FlowInstance.
+func (game *AttackDefenseGame) Flows() []ParsedFlow {
+	// The host doesn't use flows to make connections.
+	return nil
+}
+
+// Hostname implements FlowInstance.
+func (game *AttackDefenseGame) Hostname() string {
+	return "host"
+}
+
+// InstanceAddress implements FlowInstance.
+func (game *AttackDefenseGame) InstanceAddress() net.IP {
+	return net.ParseIP(HOST_IP)
+}
+
+// Services implements FlowInstance.
+func (game *AttackDefenseGame) Services() []FlowService {
+	return []FlowService{
+		game.internalWeb,
+		game.flagSubmission,
+	}
+}
+
+// Tags implements FlowInstance.
+func (game *AttackDefenseGame) Tags() TagList {
+	return TagList{"public/host"}
 }
 
 func (game *AttackDefenseGame) FrontendUrl() string {
@@ -184,6 +218,27 @@ func (game *AttackDefenseGame) GetEvents() []string {
 
 func (game *AttackDefenseGame) scaleDuration(dur time.Duration) time.Duration {
 	return time.Duration(float64(dur.Nanoseconds()) * game.TimeScale)
+}
+
+func (game *AttackDefenseGame) teamFromTag(tag string) (team *Team, bot bool, err error) {
+	if strings.HasPrefix(tag, "team/") {
+		tag = strings.TrimPrefix(tag, "team/")
+	} else if strings.HasPrefix(tag, "bot/") {
+		tag = strings.TrimPrefix(tag, "bot/")
+		bot = true
+	} else if strings.HasPrefix(tag, "device/") {
+		tag = strings.TrimPrefix(tag, "device/")
+	} else {
+		return nil, false, fmt.Errorf("invalid tag: %s", tag)
+	}
+
+	for _, t := range game.Teams {
+		if t.DisplayName == tag {
+			return t, bot, nil
+		}
+	}
+
+	return nil, false, fmt.Errorf("team not found: %s", tag)
 }
 
 func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) error {
@@ -913,8 +968,14 @@ func (game *AttackDefenseGame) Run() error {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
+	// Register the routes for the internal server.
 	if err := game.registerPrivateServer(); err != nil {
 		return fmt.Errorf("failed to register internal server: %w", err)
+	}
+
+	// Register the internal services.
+	if err := game.registerInternalServices(); err != nil {
+		return fmt.Errorf("failed to register internal services: %w", err)
 	}
 
 	if game.SshServer != "" {
@@ -1069,7 +1130,9 @@ func (game *AttackDefenseGame) AddDevice(name string) error {
 		return err
 	}
 
-	deviceInstance, deviceConfig, deviceId, err := game.Router.AddDevice(name)
+	deviceInstance := uuid.NewString()
+
+	deviceConfig, deviceId, err := game.Router.AddDevice(deviceInstance, name)
 	if err != nil {
 		return err
 	}
@@ -1107,3 +1170,7 @@ func (game *AttackDefenseGame) AddDevice(name string) error {
 func (game *AttackDefenseGame) GetDevices() []WireguardDevice {
 	return game.Router.GetDevices()
 }
+
+var (
+	_ FlowInstance = &AttackDefenseGame{}
+)
