@@ -51,11 +51,11 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 	headerRow = append(headerRow, html.Text("Name"))
 	headerRow = append(headerRow, html.Text("Points"))
 	for _, service := range game.Config.Vulnbox.Services {
-		headerRow = append(headerRow, html.Textf("%s Points", service.Name))
-		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name))
-		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name))
-		headerRow = append(headerRow, html.Textf("%s Defense Points", service.Name))
-		headerRow = append(headerRow, html.Textf("%s Uptime Points", service.Name))
+		headerRow = append(headerRow, html.Textf("%s Points", service.Name()))
+		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name()))
+		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name()))
+		headerRow = append(headerRow, html.Textf("%s Defense Points", service.Name()))
+		headerRow = append(headerRow, html.Textf("%s Uptime Points", service.Name()))
 	}
 
 	var rows []htm.Group
@@ -177,7 +177,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		for _, instance := range instances {
 			instanceList = append(instanceList, html.Div(
 				bootstrap.Card(
-					bootstrap.CardTitle(instance.Name()),
+					bootstrap.CardTitle(instance.Hostname()),
 					bootstrap.LinkButton("/connect/"+instance.InstanceId(), bootstrap.ButtonColorPrimary, html.Text("Connect")),
 				),
 			))

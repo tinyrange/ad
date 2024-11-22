@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -29,7 +30,7 @@ type SecureSSHConfig struct {
 type TinyRangeInstance interface {
 	FlowInstance
 
-	Name() string
+	InstanceId() string
 	SecureConfig() (SecureSSHConfig, error)
 
 	Start(templateName string, wireguardConfigUrl string, secureSSHPath string) error
@@ -37,6 +38,11 @@ type TinyRangeInstance interface {
 
 	RunCommand(ctx context.Context, command string) (string, error)
 	WebSSHHandler(ws *websocket.Conn) error
+
+	ParseFlows(f ReplaceFunc) error
+	AddService(service FlowService)
+
+	AcceptConn(service FlowService, conn net.Conn)
 }
 
 type tinyRangeInstance struct {
@@ -50,13 +56,45 @@ type tinyRangeInstance struct {
 	secureConfig    SecureSSHConfig
 	sshClientConfig *ssh.ClientConfig
 	address         net.IP
-	services        []Service
-	flowHandlers    []ParsedFlow
+	services        []FlowService
+	flows           []ParsedFlow
+}
+
+// AcceptConn implements TinyRangeInstance.
+func (t *tinyRangeInstance) AcceptConn(service FlowService, conn net.Conn) {
+	defer conn.Close()
+
+	other, err := t.game.Router.DialContext(context.Background(), t.instanceId, "tcp", ipPort(VM_IP, service.Port()))
+	if err != nil {
+		slog.Error("failed to dial", "err", err)
+		return
+	}
+
+	if err := common.Proxy(conn, other, 1400); err != nil {
+		slog.Error("failed to proxy", "err", err)
+	}
+}
+
+// ParseFlows implements TinyRangeInstance.
+func (t *tinyRangeInstance) ParseFlows(f ReplaceFunc) error {
+	flows, err := t.config.Flows.Parse(f)
+	if err != nil {
+		return err
+	}
+
+	t.flows = flows
+
+	return nil
+}
+
+// AddService implements TinyRangeInstance.
+func (t *tinyRangeInstance) AddService(service FlowService) {
+	t.services = append(t.services, service)
 }
 
 // Flows implements TinyRangeInstance.
 func (t *tinyRangeInstance) Flows() []ParsedFlow {
-	return t.flowHandlers
+	return t.flows
 }
 
 // InstanceAddress implements TinyRangeInstance.
@@ -65,7 +103,7 @@ func (t *tinyRangeInstance) InstanceAddress() net.IP {
 }
 
 // Services implements TinyRangeInstance.
-func (t *tinyRangeInstance) Services() []Service {
+func (t *tinyRangeInstance) Services() []FlowService {
 	return t.services
 }
 
@@ -131,7 +169,7 @@ func (t *tinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
 	return t.sshClientConfig, nil
 }
 
-func (t *tinyRangeInstance) Name() string {
+func (t *tinyRangeInstance) Hostname() string {
 	return t.name
 }
 

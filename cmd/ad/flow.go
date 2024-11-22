@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
 	"strings"
 
@@ -12,14 +11,14 @@ import (
 type ReplaceFunc func(string) (string, error)
 
 type FlowListener interface {
-	AcceptConn(target FlowInstance, service Service, conn net.Conn)
+	AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn)
 }
 
-type FuncFlowListener func(FlowInstance, Service, net.Conn)
+type FuncFlowListener func(FlowInstance, FlowInstance, FlowService, net.Conn)
 
 // AcceptConn implements FlowListener.
-func (f FuncFlowListener) AcceptConn(target FlowInstance, service Service, conn net.Conn) {
-	f(target, service, conn)
+func (f FuncFlowListener) AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
+	f(source, target, service, conn)
 }
 
 var (
@@ -89,18 +88,18 @@ func (flows FlowList) Parse(replace ReplaceFunc) ([]ParsedFlow, error) {
 	return parsedFlows, nil
 }
 
-type Service struct {
-	Name     string
-	Port     int
-	Tags     TagList
-	Listener FlowListener
+type FlowService interface {
+	FlowListener
+	Name() string
+	Port() int
+	Tags() TagList
 }
 
 type FlowInstance interface {
-	InstanceId() string
+	Hostname() string
 	Tags() TagList
 	InstanceAddress() net.IP
-	Services() []Service
+	Services() []FlowService
 	Flows() []ParsedFlow
 }
 
@@ -119,34 +118,34 @@ type FlowRouter struct {
 	instances map[string]FlowInstance
 }
 
-func (r *FlowRouter) handleConnection(source FlowInstance, target FlowInstance, service Service, conn net.Conn) bool {
+func (r *FlowRouter) handleConnection(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) bool {
 	// Iterate though each flow.
 	for _, flow := range source.Flows() {
 		// Check if the source tags match.
 		if !source.Tags().ContainsAny(source.Tags()) {
-			slog.Info("rejected source", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
+			// slog.Info("rejected source", "flow", flow, "source", source.Hostname(), "target", target.Hostname(), "service", service.Name)
 			continue
 		}
 
 		// Check if the target tags match.
 		if flow.Instance == "*" {
 			if !target.Tags().ContainsMatchingPrefix(fmt.Sprintf("%s/", flow.Tag)) {
-				slog.Info("rejected target partial", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
+				// slog.Info("rejected target partial", "flow", flow, "source", source.Hostname(), "target", target.Hostname(), "targetTags", target.Tags())
 				continue
 			}
 		} else if !target.Tags().Contains(fmt.Sprintf("%s/%s", flow.Tag, flow.Instance)) {
-			slog.Info("rejected target", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
+			// slog.Info("rejected target", "flow", flow, "source", source.Hostname(), "target", target.Hostname(), "targetTags", target.Tags())
 			continue
 		}
 
 		// Check if the service tags match.
-		if !service.Tags.Contains(flow.Service) {
-			slog.Info("rejected service", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
+		if !service.Tags().Contains(flow.Service) {
+			// slog.Info("rejected service", "flow", flow, "source", source.Hostname(), "target", target.Hostname(), "service", service.Name)
 			continue
 		}
 
 		// We have a match, accept the connection.
-		service.Listener.AcceptConn(target, service, conn)
+		service.AcceptConn(source, target, service, conn)
 		return true
 	}
 	// slog.Info("no matching flow", "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
@@ -166,7 +165,7 @@ func (r *FlowRouter) AddInstance(instance FlowInstance) (wireguard.NetHandler, e
 			if target.InstanceAddress().Equal(ip) {
 				// We found the target, now find the service.
 				for _, service := range target.Services() {
-					if service.Port == int(port) {
+					if service.Port() == int(port) {
 						// We now know instance is trying to connect to target:service.
 						if r.handleConnection(instance, target, service, conn) {
 							return

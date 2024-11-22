@@ -96,16 +96,16 @@ func TestParseFlow(t *testing.T) {
 type testInstance struct {
 	flows    []ParsedFlow
 	ip       net.IP
-	id       string
-	services []Service
+	hostname string
+	services []FlowService
 	tags     TagList
 }
 
 // implements Instance.
 func (t *testInstance) Flows() []ParsedFlow     { return t.flows }
 func (t *testInstance) InstanceAddress() net.IP { return t.ip }
-func (t *testInstance) InstanceId() string      { return t.id }
-func (t *testInstance) Services() []Service     { return t.services }
+func (t *testInstance) Hostname() string        { return t.hostname }
+func (t *testInstance) Services() []FlowService { return t.services }
 func (t *testInstance) Tags() TagList           { return t.tags }
 
 var (
@@ -130,6 +130,27 @@ var (
 	_ net.Conn = &testConn{}
 )
 
+type simpleService struct {
+	name     string
+	port     int
+	tags     TagList
+	listener FlowListener
+}
+
+// AcceptConn implements Service.
+func (s *simpleService) AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
+	s.listener.AcceptConn(source, target, service, conn)
+}
+
+// implements Service.
+func (s *simpleService) Name() string  { return s.name }
+func (s *simpleService) Port() int     { return s.port }
+func (s *simpleService) Tags() TagList { return s.tags }
+
+var (
+	_ FlowService = &simpleService{}
+)
+
 func TestFlowRouter(t *testing.T) {
 	router := NewFlowRouter()
 
@@ -144,14 +165,14 @@ func TestFlowRouter(t *testing.T) {
 				Service:  "service",
 			},
 		},
-		ip: net.IP{10, 40, 0, 1},
-		id: "instance1",
-		services: []Service{
-			{
-				Name: "service",
-				Port: 1234,
-				Tags: TagList{"service"},
-				Listener: FuncFlowListener(func(fi FlowInstance, s Service, c net.Conn) {
+		ip:       net.IP{10, 40, 0, 1},
+		hostname: "instance1",
+		services: []FlowService{
+			&simpleService{
+				name: "service",
+				port: 1234,
+				tags: TagList{"service"},
+				listener: FuncFlowListener(func(src FlowInstance, dst FlowInstance, s FlowService, c net.Conn) {
 					success = true
 				}),
 			},
@@ -168,14 +189,14 @@ func TestFlowRouter(t *testing.T) {
 				Service:  "service",
 			},
 		},
-		ip: net.IP{10, 40, 0, 2},
-		id: "instance2",
-		services: []Service{
-			{
-				Name: "service",
-				Port: 1234,
-				Tags: TagList{"service"},
-				Listener: FuncFlowListener(func(fi FlowInstance, s Service, c net.Conn) {
+		ip:       net.IP{10, 40, 0, 2},
+		hostname: "instance2",
+		services: []FlowService{
+			&simpleService{
+				name: "service",
+				port: 1234,
+				tags: TagList{"service"},
+				listener: FuncFlowListener(func(src FlowInstance, dst FlowInstance, s FlowService, c net.Conn) {
 					t.Fatalf("unexpected call to listener")
 				}),
 			},

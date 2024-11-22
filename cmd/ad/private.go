@@ -66,7 +66,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 		headerRow = append(headerRow, htm.Text("IP"))
 
 		for _, service := range game.Config.Vulnbox.Services {
-			headerRow = append(headerRow, htm.Text(service.Name))
+			headerRow = append(headerRow, htm.Text(service.Name()))
 		}
 
 		var teamList []htm.Group
@@ -77,7 +77,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			}
 
 			for _, service := range game.Config.Vulnbox.Services {
-				serviceUrl := fmt.Sprintf("http://%s:%d", team.IP(), service.Port)
+				serviceUrl := fmt.Sprintf("http://%s:%d", team.IP(), service.Port())
 				row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
 			}
 
@@ -91,7 +91,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 				}
 
 				for _, service := range game.Config.Vulnbox.Services {
-					serviceUrl := fmt.Sprintf("http://%s:%d", team.BotIP(), service.Port)
+					serviceUrl := fmt.Sprintf("http://%s:%d", team.BotIP(), service.Port())
 					row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
 				}
 
@@ -215,8 +215,8 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			for _, service := range game.Config.Vulnbox.Services {
 				teams[i].Services = append(teams[i].Services, serviceApiResponse{
 					Id:   service.Id,
-					Name: service.Name,
-					Port: service.Port,
+					Name: service.Name(),
+					Port: service.Port(),
 				})
 			}
 		}

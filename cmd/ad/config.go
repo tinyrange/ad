@@ -1,13 +1,37 @@
 package main
 
+import (
+	"fmt"
+	"log/slog"
+	"net"
+)
+
 const CURRENT_CONFIG_VERSION = 1
 
 type ServiceConfig struct {
-	Id   int     `yaml:"id"`
-	Name string  `yaml:"name"`
-	Port int     `yaml:"port"`
-	Tags TagList `yaml:"tags"`
+	Id          int     `yaml:"id"`
+	ServiceName string  `yaml:"name"`
+	ServicePort int     `yaml:"port"`
+	ServiceTags TagList `yaml:"tags"`
 }
+
+// AcceptConn implements FlowService.
+func (s *ServiceConfig) AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
+	if tr, ok := target.(TinyRangeInstance); ok {
+		tr.AcceptConn(service, conn)
+	} else {
+		slog.Error("invalid target instance", "target", target, "targetType", fmt.Sprintf("%T", target))
+	}
+}
+
+// implements FlowService.
+func (s *ServiceConfig) Name() string  { return s.ServiceName }
+func (s *ServiceConfig) Port() int     { return s.ServicePort }
+func (s *ServiceConfig) Tags() TagList { return s.ServiceTags }
+
+var (
+	_ FlowService = &ServiceConfig{}
+)
 
 type InstanceConfig struct {
 	Template string   `yaml:"template"`

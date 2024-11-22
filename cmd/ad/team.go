@@ -175,6 +175,20 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 	}
 	t.teamInstance = inst
 
+	if err := inst.ParseFlows(func(s string) (string, error) {
+		if s == "team" {
+			return t.DisplayName, nil
+		} else {
+			return "", fmt.Errorf("invalid flow variable: %s", s)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to parse flows for team (%d): %w", t.ID, err)
+	}
+
+	for _, service := range game.Config.Vulnbox.Services {
+		inst.AddService(&service)
+	}
+
 	if err := game.registerFlowsForTeam(t, t.Info()); err != nil {
 		return fmt.Errorf("failed to register flows for team (%d): %w", t.ID, err)
 	}
@@ -187,6 +201,16 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		}
 		t.botInstance = inst
 
+		if err := inst.ParseFlows(func(s string) (string, error) {
+			if s == "team" {
+				return t.DisplayName, nil
+			} else {
+				return "", fmt.Errorf("invalid flow variable: %s", s)
+			}
+		}); err != nil {
+			return fmt.Errorf("failed to parse flows for team (%d): %w", t.ID, err)
+		}
+
 		if err := game.registerFlowsForTeam(t, t.BotInfo()); err != nil {
 			return fmt.Errorf("failed to register flows for team bot (%d): %w", t.ID, err)
 		}
@@ -194,8 +218,8 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		// Open the bot to the team.
 		for _, service := range game.Config.Vulnbox.Services {
 			if err := game.Router.AddSimpleForwarder(
-				t.InstanceId(), ipPort(t.BotIP(), service.Port),
-				t.BotInstanceId(), ipPort(VM_IP, service.Port),
+				t.InstanceId(), ipPort(t.BotIP(), service.Port()),
+				t.BotInstanceId(), ipPort(VM_IP, service.Port()),
 			); err != nil {
 				return err
 			}
@@ -204,8 +228,8 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		// Open the team to the bot.
 		for _, service := range game.Config.Vulnbox.Services {
 			if err := game.Router.AddSimpleForwarder(
-				t.BotInstanceId(), ipPort(t.IP(), service.Port),
-				t.InstanceId(), ipPort(VM_IP, service.Port),
+				t.BotInstanceId(), ipPort(t.IP(), service.Port()),
+				t.InstanceId(), ipPort(VM_IP, service.Port()),
 			); err != nil {
 				return err
 			}

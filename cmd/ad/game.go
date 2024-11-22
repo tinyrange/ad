@@ -190,8 +190,8 @@ func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) er
 	for _, service := range game.Config.Vulnbox.Services {
 		// Connect the team machine to itself.
 		if err := game.Router.AddSimpleForwarder(
-			info.InstanceId, ipPort(info.IP, service.Port),
-			info.InstanceId, ipPort(VM_IP, service.Port),
+			info.InstanceId, ipPort(info.IP, service.Port()),
+			info.InstanceId, ipPort(VM_IP, service.Port()),
 		); err != nil {
 			return err
 		}
@@ -205,8 +205,8 @@ func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) er
 	for _, service := range game.Config.Vulnbox.Services {
 		// Connect the scoring machine to the team.
 		if err := game.Router.AddSimpleForwarder(
-			game.ScoreBotInstanceId(), ipPort(info.IP, service.Port),
-			info.InstanceId, ipPort(VM_IP, service.Port),
+			game.ScoreBotInstanceId(), ipPort(info.IP, service.Port()),
+			info.InstanceId, ipPort(VM_IP, service.Port()),
 		); err != nil {
 			return err
 		}
@@ -254,8 +254,8 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 		for _, service := range game.Config.Vulnbox.Services {
 			// Connect the device to the team machine.
 			if err := game.Router.AddSimpleForwarder(
-				deviceId, ipPort(team.Info().IP, service.Port),
-				team.Info().InstanceId, ipPort(VM_IP, service.Port),
+				deviceId, ipPort(team.Info().IP, service.Port()),
+				team.Info().InstanceId, ipPort(VM_IP, service.Port()),
 			); err != nil {
 				return err
 			}
@@ -274,8 +274,8 @@ func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
 			for _, service := range game.Config.Vulnbox.Services {
 				// Connect the device to the bot machine.
 				if err := game.Router.AddSimpleForwarder(
-					deviceId, ipPort(team.BotInfo().IP, service.Port),
-					team.BotInfo().InstanceId, ipPort(VM_IP, service.Port),
+					deviceId, ipPort(team.BotInfo().IP, service.Port()),
+					team.BotInfo().InstanceId, ipPort(VM_IP, service.Port()),
 				); err != nil {
 					return err
 				}
@@ -647,7 +647,7 @@ func (game *AttackDefenseGame) updateScoreboard() error {
 		teamState.Services = make(map[int]*ServiceState)
 		for i, service := range game.Config.Vulnbox.Services {
 			teamState.Services[i] = &ServiceState{
-				Name: service.Name,
+				Name: service.Name(),
 			}
 		}
 
@@ -665,7 +665,7 @@ func (game *AttackDefenseGame) updateScoreboard() error {
 			botState.Services = make(map[int]*ServiceState)
 			for i, service := range game.Config.Vulnbox.Services {
 				botState.Services[i] = &ServiceState{
-					Name: service.Name,
+					Name: service.Name(),
 				}
 			}
 
