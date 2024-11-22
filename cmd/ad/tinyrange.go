@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 )
@@ -26,11 +27,12 @@ type SecureSSHConfig struct {
 }
 
 type TinyRangeInstance interface {
+	FlowInstance
+
 	Name() string
-	InstanceId() string
 	SecureConfig() (SecureSSHConfig, error)
 
-	Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error
+	Start(templateName string, wireguardConfigUrl string, secureSSHPath string) error
 	Stop() error
 
 	RunCommand(ctx context.Context, command string) (string, error)
@@ -40,12 +42,36 @@ type TinyRangeInstance interface {
 type tinyRangeInstance struct {
 	mtx             sync.Mutex
 	game            *AttackDefenseGame
+	config          InstanceConfig
 	cmd             *exec.Cmd
 	name            string
 	instanceId      string
 	secureSSHPath   string
 	secureConfig    SecureSSHConfig
 	sshClientConfig *ssh.ClientConfig
+	address         net.IP
+	services        []Service
+	flowHandlers    []FlowHandler
+}
+
+// Flows implements TinyRangeInstance.
+func (t *tinyRangeInstance) Flows() []FlowHandler {
+	return t.flowHandlers
+}
+
+// InstanceAddress implements TinyRangeInstance.
+func (t *tinyRangeInstance) InstanceAddress() net.IP {
+	return t.address
+}
+
+// Services implements TinyRangeInstance.
+func (t *tinyRangeInstance) Services() []Service {
+	return t.services
+}
+
+// Tags implements TinyRangeInstance.
+func (t *tinyRangeInstance) Tags() TagList {
+	return t.config.Tags
 }
 
 func (t *tinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
@@ -113,7 +139,7 @@ func (t *tinyRangeInstance) InstanceId() string {
 	return t.instanceId
 }
 
-func (t *tinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error {
+func (t *tinyRangeInstance) Start(templateName string, wireguardConfigUrl string, secureSSHPath string) error {
 	// Load the template.
 	template, ok := t.game.getCachedTemplate(templateName)
 	if !ok {
@@ -142,7 +168,6 @@ func (t *tinyRangeInstance) Start(templateName string, instanceId string, wiregu
 	}
 
 	t.cmd = cmd
-	t.instanceId = instanceId
 	t.secureSSHPath = secureSSHPath
 
 	return nil
@@ -365,9 +390,11 @@ func (t *tinyRangeInstance) Stop() error {
 	return nil
 }
 
-func NewTinyRangeInstance(game *AttackDefenseGame, name string) TinyRangeInstance {
+func NewTinyRangeInstance(game *AttackDefenseGame, name string, ip net.IP, config InstanceConfig) TinyRangeInstance {
 	return &tinyRangeInstance{
-		game: game,
-		name: name,
+		instanceId: uuid.NewString(),
+		game:       game,
+		name:       name,
+		config:     config,
 	}
 }

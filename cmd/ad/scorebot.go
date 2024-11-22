@@ -76,11 +76,9 @@ func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame,
 }
 
 type ScoreBotConfig struct {
-	Template    string                   `yaml:"template"`
-	Services    []*ScoreBotServiceConfig `yaml:"services"`
-	Tags        TagList                  `yaml:"tags"`
-	Flows       FlowList                 `yaml:"flows"`
-	HealthCheck string                   `yaml:"health_check"`
+	InstanceConfig `yaml:",inline"`
+	Services       []*ScoreBotServiceConfig `yaml:"services"`
+	HealthCheck    string                   `yaml:"health_check"`
 
 	instance TinyRangeInstance
 }
@@ -96,7 +94,7 @@ func (v *ScoreBotConfig) Stop() error {
 }
 
 func (v *ScoreBotConfig) Start(game *AttackDefenseGame) error {
-	inst, err := game.startInstanceFromTemplate("scorebot", v.Template)
+	inst, err := game.StartInstanceFromConfig("scorebot", SCOREBOT_IP, v.InstanceConfig)
 	if err != nil {
 		return err
 	}

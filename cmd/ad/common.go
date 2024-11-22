@@ -12,8 +12,9 @@ import (
 const BOT_ID_OFFSET = 0xffff
 
 const (
-	HOST_IP = "10.40.0.1"
-	VM_IP   = "10.42.0.2"
+	HOST_IP     = "10.40.0.1"
+	SCOREBOT_IP = "10.40.0.10"
+	VM_IP       = "10.42.0.2"
 )
 
 func ipPort(ip string, port int) string {

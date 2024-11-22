@@ -9,13 +9,17 @@ type ServiceConfig struct {
 	Tags TagList `yaml:"tags"`
 }
 
+type InstanceConfig struct {
+	Template string   `yaml:"template"`
+	Tags     TagList  `yaml:"tags"`
+	Flows    FlowList `yaml:"flows"`
+}
+
 type VulnboxConfig struct {
-	Template     string          `yaml:"template"`
-	InitTemplate string          `yaml:"init"`
-	Services     []ServiceConfig `yaml:"services"`
-	Tags         TagList         `yaml:"tags"`
-	Flows        FlowList        `yaml:"flows"`
-	Bot          BotConfig       `yaml:"bot"`
+	InstanceConfig `yaml:",inline"`
+	InitTemplate   string          `yaml:"init"`
+	Services       []ServiceConfig `yaml:"services"`
+	Bot            BotConfig       `yaml:"bot"`
 }
 
 type EventDefinition struct {
@@ -25,11 +29,9 @@ type EventDefinition struct {
 type EventMap map[string]EventDefinition
 
 type BotConfig struct {
-	Enabled  bool     `yaml:"enabled"`
-	Template string   `yaml:"template"`
-	Events   EventMap `yaml:"events"`
-	Tags     TagList  `yaml:"tags"`
-	Flows    FlowList `yaml:"flows"`
+	InstanceConfig `yaml:",inline"`
+	Enabled        bool     `yaml:"enabled"`
+	Events         EventMap `yaml:"events"`
 }
 
 type DeviceGlobalConfig struct {

@@ -12,13 +12,13 @@ import (
 type ReplaceFunc func(string) (string, error)
 
 type FlowListener interface {
-	AcceptConn(target Instance, service Service, conn net.Conn)
+	AcceptConn(target FlowInstance, service Service, conn net.Conn)
 }
 
-type FuncFlowListener func(Instance, Service, net.Conn)
+type FuncFlowListener func(FlowInstance, Service, net.Conn)
 
 // AcceptConn implements FlowListener.
-func (f FuncFlowListener) AcceptConn(target Instance, service Service, conn net.Conn) {
+func (f FuncFlowListener) AcceptConn(target FlowInstance, service Service, conn net.Conn) {
 	f(target, service, conn)
 }
 
@@ -100,10 +100,10 @@ type FlowHandler struct {
 	FlowListener
 }
 
-type Instance interface {
-	Id() string
+type FlowInstance interface {
+	InstanceId() string
 	Tags() TagList
-	IP() net.IP
+	InstanceAddress() net.IP
 	Services() []Service
 	Flows() []FlowHandler
 }
@@ -120,32 +120,32 @@ var (
 )
 
 type FlowRouter struct {
-	instances map[string]Instance
+	instances map[string]FlowInstance
 }
 
-func (r *FlowRouter) handleConnection(source Instance, target Instance, service Service, conn net.Conn) bool {
+func (r *FlowRouter) handleConnection(source FlowInstance, target FlowInstance, service Service, conn net.Conn) bool {
 	// Iterate though each flow.
 	for _, flow := range source.Flows() {
 		// Check if the source tags match.
 		if !source.Tags().ContainsAny(source.Tags()) {
-			slog.Info("rejected source", "flow", flow.ParsedFlow, "source", source.Id(), "target", target.Id(), "service", service.Name)
+			slog.Info("rejected source", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
 			continue
 		}
 
 		// Check if the target tags match.
 		if flow.ParsedFlow.Instance == "*" {
 			if !target.Tags().ContainsMatchingPrefix(fmt.Sprintf("%s/", flow.ParsedFlow.Tag)) {
-				slog.Info("rejected target partial", "flow", flow.ParsedFlow, "source", source.Id(), "target", target.Id(), "targetTags", target.Tags())
+				slog.Info("rejected target partial", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
 				continue
 			}
 		} else if !target.Tags().Contains(fmt.Sprintf("%s/%s", flow.ParsedFlow.Tag, flow.ParsedFlow.Instance)) {
-			slog.Info("rejected target", "flow", flow.ParsedFlow, "source", source.Id(), "target", target.Id(), "targetTags", target.Tags())
+			slog.Info("rejected target", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
 			continue
 		}
 
 		// Check if the service tags match.
 		if !service.Tags.Contains(flow.ParsedFlow.Service) {
-			slog.Info("rejected service", "flow", flow.ParsedFlow, "source", source.Id(), "target", target.Id(), "service", service.Name)
+			slog.Info("rejected service", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
 			continue
 		}
 
@@ -153,21 +153,21 @@ func (r *FlowRouter) handleConnection(source Instance, target Instance, service 
 		flow.FlowListener.AcceptConn(target, service, conn)
 		return true
 	}
-	// slog.Info("no matching flow", "source", source.Id(), "target", target.Id(), "service", service.Name)
+	// slog.Info("no matching flow", "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
 	return false
 }
 
-func (r *FlowRouter) AddInstance(instance Instance) (wireguard.NetHandler, error) {
-	if _, ok := r.instances[instance.Id()]; ok {
-		return nil, fmt.Errorf("instance already exists: %s", instance.Id())
+func (r *FlowRouter) AddInstance(instance FlowInstance) (wireguard.NetHandler, error) {
+	if _, ok := r.instances[instance.InstanceId()]; ok {
+		return nil, fmt.Errorf("instance already exists: %s", instance.InstanceId())
 	}
 
-	r.instances[instance.Id()] = instance
+	r.instances[instance.InstanceId()] = instance
 
 	return flowRouterHandler(func(network string, ip net.IP, port uint16, conn net.Conn) {
 		// find the target by IP
 		for _, target := range r.instances {
-			if target.IP().Equal(ip) {
+			if target.InstanceAddress().Equal(ip) {
 				// We found the target, now find the service.
 				for _, service := range target.Services() {
 					if service.Port == int(port) {
@@ -180,7 +180,7 @@ func (r *FlowRouter) AddInstance(instance Instance) (wireguard.NetHandler, error
 			}
 		}
 
-		// slog.Info("no matching target", "source", instance.Id(), "ip", ip, "port", port)
+		// slog.Info("no matching target", "source", instance.InstanceId(), "ip", ip, "port", port)
 
 		// If we reach here, we couldn't find the target.
 		// TODO(joshua): Handle a default route.
@@ -190,6 +190,6 @@ func (r *FlowRouter) AddInstance(instance Instance) (wireguard.NetHandler, error
 
 func NewFlowRouter() *FlowRouter {
 	return &FlowRouter{
-		instances: make(map[string]Instance),
+		instances: make(map[string]FlowInstance),
 	}
 }

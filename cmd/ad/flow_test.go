@@ -102,14 +102,14 @@ type testInstance struct {
 }
 
 // implements Instance.
-func (t *testInstance) Flows() []FlowHandler { return t.flows }
-func (t *testInstance) IP() net.IP           { return t.ip }
-func (t *testInstance) Id() string           { return t.id }
-func (t *testInstance) Services() []Service  { return t.services }
-func (t *testInstance) Tags() TagList        { return t.tags }
+func (t *testInstance) Flows() []FlowHandler    { return t.flows }
+func (t *testInstance) InstanceAddress() net.IP { return t.ip }
+func (t *testInstance) InstanceId() string      { return t.id }
+func (t *testInstance) Services() []Service     { return t.services }
+func (t *testInstance) Tags() TagList           { return t.tags }
 
 var (
-	_ Instance = &testInstance{}
+	_ FlowInstance = &testInstance{}
 )
 
 type testConn struct {
@@ -144,7 +144,7 @@ func TestFlowRouter(t *testing.T) {
 					Instance: "*",
 					Service:  "service",
 				},
-				FlowListener: FuncFlowListener(func(i Instance, s Service, c net.Conn) {
+				FlowListener: FuncFlowListener(func(i FlowInstance, s Service, c net.Conn) {
 					t.Fatalf("unexpected call to flow listener")
 				}),
 			},
@@ -170,8 +170,8 @@ func TestFlowRouter(t *testing.T) {
 					Instance: "*",
 					Service:  "service",
 				},
-				FlowListener: FuncFlowListener(func(i Instance, s Service, c net.Conn) {
-					t.Logf("flow listener called %s %s", i.Id(), s.Name)
+				FlowListener: FuncFlowListener(func(i FlowInstance, s Service, c net.Conn) {
+					t.Logf("flow listener called %s %s", i.InstanceId(), s.Name)
 					success = true
 				}),
 			},

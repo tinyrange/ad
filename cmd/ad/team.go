@@ -169,7 +169,7 @@ func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error 
 
 func (t *Team) Start(game *AttackDefenseGame) error {
 	// Start the team instance.
-	inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName, game.Config.Vulnbox.Template)
+	inst, err := game.StartInstanceFromConfig("team_"+t.DisplayName, t.IP(), game.Config.Vulnbox.InstanceConfig)
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 
 	// If there is a bot, start the bot instance.
 	if game.Config.Vulnbox.Bot.Enabled {
-		inst, err := game.startInstanceFromTemplate("team_"+t.DisplayName+"_bot", game.Config.Vulnbox.Bot.Template)
+		inst, err := game.StartInstanceFromConfig("team_"+t.DisplayName+"_bot", t.BotIP(), game.Config.Vulnbox.Bot.InstanceConfig)
 		if err != nil {
 			return err
 		}

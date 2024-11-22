@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
 )
@@ -419,50 +418,32 @@ func (game *AttackDefenseGame) DialContext(ctx context.Context, instanceId strin
 	return game.Router.DialContext(ctx, instanceId, network, address)
 }
 
-func (game *AttackDefenseGame) generateWireguardConfig() (string, string, error) {
-	instanceUuid, err := uuid.NewRandom()
-	if err != nil {
-		return "", "", err
-	}
-
-	instanceId := instanceUuid.String()
-
-	// Generate the wireguard config.
-	configUrl, err := game.Router.AddEndpoint(instanceId)
-	if err != nil {
-		return "", "", err
-	}
-
-	return instanceId, configUrl, nil
-}
-
-func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFilename string) (TinyRangeInstance, error) {
+func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, config InstanceConfig) (TinyRangeInstance, error) {
 	// Check if the template is already cached.
-	if err := game.ensureTemplateCached(templateFilename); err != nil {
+	if err := game.ensureTemplateCached(config.Template); err != nil {
 		return nil, err
 	}
-
-	// Generate the wireguard config URL.
-	instanceId, wireguardConfigUrl, err := game.generateWireguardConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	slog.Info("starting instance", "template", templateFilename, "instance", instanceId, "name", name)
 
 	// Start the instance.
-	inst := NewTinyRangeInstance(game, name)
+	inst := NewTinyRangeInstance(game, name, net.ParseIP(ip), config)
+
+	slog.Info("starting instance", "template", config.Template, "instance", inst.InstanceId(), "name", name)
+
+	game.instances = append(game.instances, inst)
+
+	wireguardConfigUrl, err := game.Router.AddEndpoint(inst.InstanceId())
+	if err != nil {
+		return nil, err
+	}
 
 	secureSSHPath, err := game.Persist.EnsurePath("ssh", name)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := inst.Start(templateFilename, instanceId, wireguardConfigUrl, secureSSHPath); err != nil {
+	if err := inst.Start(config.Template, wireguardConfigUrl, secureSSHPath); err != nil {
 		return nil, err
 	}
-
-	game.instances = append(game.instances, inst)
 
 	return inst, nil
 }
