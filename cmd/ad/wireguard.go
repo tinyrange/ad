@@ -18,6 +18,7 @@ import (
 
 type wireguardInstance struct {
 	wg         *wireguard.Wireguard
+	handler    *wireguard.SimpleFlowHandler
 	peerConfig string
 	isDevice   bool
 	deviceId   int
@@ -29,7 +30,7 @@ func (w *wireguardInstance) DeviceIP() string {
 }
 
 func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) error {
-	listen, err := w.wg.ListenTCPAddr(addr)
+	listen, err := w.handler.ListenTCPAddr(addr)
 	if err != nil {
 		return err
 	}
@@ -90,7 +91,7 @@ func (r *WireguardRouter) AddListener(instanceId, addr string) (net.Listener, er
 		return nil, err
 	}
 
-	return instance.wg.ListenTCPAddr(addr)
+	return instance.handler.ListenTCPAddr(addr)
 }
 
 func (r *WireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
@@ -108,7 +109,7 @@ func (r *WireguardRouter) AddSimpleForwarder(source string, sourceAddr string, d
 		return err
 	}
 
-	listen, err := sourceInstance.wg.ListenTCPAddr(sourceAddr)
+	listen, err := sourceInstance.handler.ListenTCPAddr(sourceAddr)
 	if err != nil {
 		return err
 	}
@@ -148,12 +149,13 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 
 	slog.Info("adding wireguard endpoint", "instance", instanceId)
 
-	wg, err := wireguard.NewServer(HOST_IP, r.mtu)
+	handler := wireguard.NewSimpleFlowHandler()
+	wg, err := wireguard.NewServer(HOST_IP, r.mtu, handler)
 	if err != nil {
 		return "", err
 	}
 
-	listen, err := wg.ListenTCPAddr("8.8.8.8:80")
+	listen, err := handler.ListenTCPAddr("8.8.8.8:80")
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +172,8 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 	}()
 
 	r.endpoints[instanceId] = &wireguardInstance{
-		wg: wg,
+		wg:      wg,
+		handler: handler,
 	}
 
 	peerConfig, err := wg.CreatePeer(r.publicAddress)
@@ -332,13 +335,15 @@ func (r *WireguardRouter) AddDevice(name string) (instanceId string, config stri
 
 	id = len(r.endpoints)
 
-	wg, err := wireguard.NewServer(HOST_IP, r.mtu)
+	handler := wireguard.NewSimpleFlowHandler()
+	wg, err := wireguard.NewServer(HOST_IP, r.mtu, handler)
 	if err != nil {
 		return "", "", -1, err
 	}
 
 	r.endpoints[instanceId] = &wireguardInstance{
 		wg:       wg,
+		handler:  handler,
 		isDevice: true,
 		deviceId: id,
 		name:     name,
@@ -396,13 +401,15 @@ func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error 
 		return err
 	}
 
-	wg, err := wireguard.NewFromConfig(HOST_IP, r.mtu, newConfig)
+	handler := wireguard.NewSimpleFlowHandler()
+	wg, err := wireguard.NewFromConfig(HOST_IP, r.mtu, newConfig, handler)
 	if err != nil {
 		return err
 	}
 
 	inst := &wireguardInstance{
 		wg:       wg,
+		handler:  handler,
 		isDevice: true,
 		deviceId: config.ID,
 		name:     name,
