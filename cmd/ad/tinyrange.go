@@ -51,11 +51,11 @@ type tinyRangeInstance struct {
 	sshClientConfig *ssh.ClientConfig
 	address         net.IP
 	services        []Service
-	flowHandlers    []FlowHandler
+	flowHandlers    []ParsedFlow
 }
 
 // Flows implements TinyRangeInstance.
-func (t *tinyRangeInstance) Flows() []FlowHandler {
+func (t *tinyRangeInstance) Flows() []ParsedFlow {
 	return t.flowHandlers
 }
 

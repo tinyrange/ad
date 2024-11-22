@@ -90,14 +90,10 @@ func (flows FlowList) Parse(replace ReplaceFunc) ([]ParsedFlow, error) {
 }
 
 type Service struct {
-	Name string
-	Port int
-	Tags TagList
-}
-
-type FlowHandler struct {
-	ParsedFlow
-	FlowListener
+	Name     string
+	Port     int
+	Tags     TagList
+	Listener FlowListener
 }
 
 type FlowInstance interface {
@@ -105,7 +101,7 @@ type FlowInstance interface {
 	Tags() TagList
 	InstanceAddress() net.IP
 	Services() []Service
-	Flows() []FlowHandler
+	Flows() []ParsedFlow
 }
 
 type flowRouterHandler func(network string, ip net.IP, port uint16, conn net.Conn)
@@ -128,29 +124,29 @@ func (r *FlowRouter) handleConnection(source FlowInstance, target FlowInstance, 
 	for _, flow := range source.Flows() {
 		// Check if the source tags match.
 		if !source.Tags().ContainsAny(source.Tags()) {
-			slog.Info("rejected source", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
+			slog.Info("rejected source", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
 			continue
 		}
 
 		// Check if the target tags match.
-		if flow.ParsedFlow.Instance == "*" {
-			if !target.Tags().ContainsMatchingPrefix(fmt.Sprintf("%s/", flow.ParsedFlow.Tag)) {
-				slog.Info("rejected target partial", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
+		if flow.Instance == "*" {
+			if !target.Tags().ContainsMatchingPrefix(fmt.Sprintf("%s/", flow.Tag)) {
+				slog.Info("rejected target partial", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
 				continue
 			}
-		} else if !target.Tags().Contains(fmt.Sprintf("%s/%s", flow.ParsedFlow.Tag, flow.ParsedFlow.Instance)) {
-			slog.Info("rejected target", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
+		} else if !target.Tags().Contains(fmt.Sprintf("%s/%s", flow.Tag, flow.Instance)) {
+			slog.Info("rejected target", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "targetTags", target.Tags())
 			continue
 		}
 
 		// Check if the service tags match.
-		if !service.Tags.Contains(flow.ParsedFlow.Service) {
-			slog.Info("rejected service", "flow", flow.ParsedFlow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
+		if !service.Tags.Contains(flow.Service) {
+			slog.Info("rejected service", "flow", flow, "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)
 			continue
 		}
 
 		// We have a match, accept the connection.
-		flow.FlowListener.AcceptConn(target, service, conn)
+		service.Listener.AcceptConn(target, service, conn)
 		return true
 	}
 	// slog.Info("no matching flow", "source", source.InstanceId(), "target", target.InstanceId(), "service", service.Name)

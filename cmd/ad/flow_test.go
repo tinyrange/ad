@@ -94,7 +94,7 @@ func TestParseFlow(t *testing.T) {
 }
 
 type testInstance struct {
-	flows    []FlowHandler
+	flows    []ParsedFlow
 	ip       net.IP
 	id       string
 	services []Service
@@ -102,7 +102,7 @@ type testInstance struct {
 }
 
 // implements Instance.
-func (t *testInstance) Flows() []FlowHandler    { return t.flows }
+func (t *testInstance) Flows() []ParsedFlow     { return t.flows }
 func (t *testInstance) InstanceAddress() net.IP { return t.ip }
 func (t *testInstance) InstanceId() string      { return t.id }
 func (t *testInstance) Services() []Service     { return t.services }
@@ -137,16 +137,11 @@ func TestFlowRouter(t *testing.T) {
 
 	// Create a test instance.
 	instance1 := &testInstance{
-		flows: []FlowHandler{
+		flows: []ParsedFlow{
 			{
-				ParsedFlow: ParsedFlow{
-					Tag:      "tag",
-					Instance: "*",
-					Service:  "service",
-				},
-				FlowListener: FuncFlowListener(func(i FlowInstance, s Service, c net.Conn) {
-					t.Fatalf("unexpected call to flow listener")
-				}),
+				Tag:      "tag",
+				Instance: "*",
+				Service:  "service",
 			},
 		},
 		ip: net.IP{10, 40, 0, 1},
@@ -156,6 +151,9 @@ func TestFlowRouter(t *testing.T) {
 				Name: "service",
 				Port: 1234,
 				Tags: TagList{"service"},
+				Listener: FuncFlowListener(func(fi FlowInstance, s Service, c net.Conn) {
+					success = true
+				}),
 			},
 		},
 		tags: TagList{"tag/instance"},
@@ -163,17 +161,11 @@ func TestFlowRouter(t *testing.T) {
 
 	// Register the instance.
 	instance2 := &testInstance{
-		flows: []FlowHandler{
+		flows: []ParsedFlow{
 			{
-				ParsedFlow: ParsedFlow{
-					Tag:      "tag",
-					Instance: "*",
-					Service:  "service",
-				},
-				FlowListener: FuncFlowListener(func(i FlowInstance, s Service, c net.Conn) {
-					t.Logf("flow listener called %s %s", i.InstanceId(), s.Name)
-					success = true
-				}),
+				Tag:      "tag",
+				Instance: "*",
+				Service:  "service",
 			},
 		},
 		ip: net.IP{10, 40, 0, 2},
@@ -183,6 +175,9 @@ func TestFlowRouter(t *testing.T) {
 				Name: "service",
 				Port: 1234,
 				Tags: TagList{"service"},
+				Listener: FuncFlowListener(func(fi FlowInstance, s Service, c net.Conn) {
+					t.Fatalf("unexpected call to listener")
+				}),
 			},
 		},
 		tags: TagList{"tag/instance"},
