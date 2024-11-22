@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -84,3 +85,32 @@ const (
 	InvalidService    FlagStatus = "INVALID_SERVICE"
 	InvalidTeam       FlagStatus = "INVALID_TEAM"
 )
+
+type TagList []string
+
+func (tags TagList) Contains(tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func (tags TagList) ContainsMatchingPrefix(prefix string) bool {
+	for _, t := range tags {
+		if strings.HasPrefix(t, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (tags TagList) ContainsAny(other TagList) bool {
+	for _, tag := range other {
+		if tags.Contains(tag) {
+			return true
+		}
+	}
+	return false
+}

@@ -64,8 +64,23 @@ type WireguardDevice struct {
 	IP        string
 }
 
+type WireguardRouter interface {
+	AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error
+	AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error
+	AddListener(instanceId, addr string) (net.Listener, error)
+
+	DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error)
+
+	AddEndpoint(instanceId string) (string, error)
+	AddDevice(name string) (instanceId string, config string, id int, err error)
+	RestoreDevice(name string, config DeviceConfig) error
+	GetDevices() []WireguardDevice
+
+	RegisterMux(mux *http.ServeMux)
+}
+
 // A wireguard router that generates wireguard configurations.
-type WireguardRouter struct {
+type wireguardRouter struct {
 	mtx           sync.Mutex
 	publicAddress string
 	mtu           int
@@ -73,7 +88,7 @@ type WireguardRouter struct {
 	endpoints     map[string]*wireguardInstance
 }
 
-func (r *WireguardRouter) getInstance(instanceId string) (*wireguardInstance, error) {
+func (r *wireguardRouter) getInstance(instanceId string) (*wireguardInstance, error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -85,7 +100,7 @@ func (r *WireguardRouter) getInstance(instanceId string) (*wireguardInstance, er
 	return instance, nil
 }
 
-func (r *WireguardRouter) AddListener(instanceId, addr string) (net.Listener, error) {
+func (r *wireguardRouter) AddListener(instanceId, addr string) (net.Listener, error) {
 	instance, err := r.getInstance(instanceId)
 	if err != nil {
 		return nil, err
@@ -94,7 +109,7 @@ func (r *WireguardRouter) AddListener(instanceId, addr string) (net.Listener, er
 	return instance.handler.ListenTCPAddr(addr)
 }
 
-func (r *WireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
+func (r *wireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
 	instance, err := r.getInstance(instanceId)
 	if err != nil {
 		return err
@@ -103,7 +118,7 @@ func (r *WireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net
 	return instance.addSimpleListener(addr, cb)
 }
 
-func (r *WireguardRouter) AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error {
+func (r *wireguardRouter) AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error {
 	sourceInstance, err := r.getInstance(source)
 	if err != nil {
 		return err
@@ -143,7 +158,7 @@ func (r *WireguardRouter) AddSimpleForwarder(source string, sourceAddr string, d
 	return nil
 }
 
-func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
+func (r *wireguardRouter) AddEndpoint(instanceId string) (string, error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -186,7 +201,7 @@ func (r *WireguardRouter) AddEndpoint(instanceId string) (string, error) {
 	return fmt.Sprintf("%s/wireguard/%s", r.serverUrl, instanceId), nil
 }
 
-func (r *WireguardRouter) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
+func (r *wireguardRouter) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
 	// slog.Info("dialing", "instance", instanceId, "network", network, "address", address)
 
 	instance, err := r.getInstance(instanceId)
@@ -197,7 +212,7 @@ func (r *WireguardRouter) DialContext(ctx context.Context, instanceId string, ne
 	return instance.wg.DialContext(ctx, network, address)
 }
 
-func (r *WireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) {
+func (r *wireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) {
 	instanceId := req.PathValue("instance")
 
 	slog.Debug("serving wireguard config", "instance", instanceId)
@@ -219,11 +234,11 @@ func (r *WireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) 
 	}
 }
 
-func (r *WireguardRouter) registerMux(mux *http.ServeMux) {
+func (r *wireguardRouter) RegisterMux(mux *http.ServeMux) {
 	mux.HandleFunc("GET /wireguard/{instance}", r.serveConfig)
 }
 
-func (r *WireguardRouter) GetDevices() []WireguardDevice {
+func (r *wireguardRouter) GetDevices() []WireguardDevice {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -246,7 +261,7 @@ func (r *WireguardRouter) GetDevices() []WireguardDevice {
 	return devices
 }
 
-func (r *WireguardRouter) translateToDeviceConfig(instance *wireguardInstance, peerConfig string) (string, error) {
+func (r *wireguardRouter) translateToDeviceConfig(instance *wireguardInstance, peerConfig string) (string, error) {
 	var (
 		privateKey string
 		publicKey  string
@@ -322,7 +337,7 @@ Endpoint = %s:%s
 	return config, nil
 }
 
-func (r *WireguardRouter) AddDevice(name string) (instanceId string, config string, id int, err error) {
+func (r *wireguardRouter) AddDevice(name string) (instanceId string, config string, id int, err error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -392,7 +407,7 @@ func filterConfigToKeys(config string, keys []string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error {
+func (r *wireguardRouter) RestoreDevice(name string, config DeviceConfig) error {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -425,4 +440,13 @@ func (r *WireguardRouter) restoreDevice(name string, config DeviceConfig) error 
 	inst.peerConfig = deviceConfig
 
 	return nil
+}
+
+func NewWireguardRouter(publicAddress string, mtu int, serverUrl string) WireguardRouter {
+	return &wireguardRouter{
+		publicAddress: publicAddress,
+		mtu:           mtu,
+		serverUrl:     serverUrl,
+		endpoints:     make(map[string]*wireguardInstance),
+	}
 }

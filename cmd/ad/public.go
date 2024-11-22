@@ -469,7 +469,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 	}
 
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
-	game.Router.registerMux(handler)
+	game.Router.RegisterMux(handler)
 
 	publicAddr := fmt.Sprintf("%s:%d", game.PublicIP, game.PublicPort)
 

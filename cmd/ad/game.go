@@ -109,7 +109,7 @@ type AttackDefenseGame struct {
 	Teams []*Team
 
 	// Router is the wireguard router for the game.
-	Router *WireguardRouter
+	Router WireguardRouter
 
 	// RouterMTU is the MTU(Maximum Transmission Unit) for the router.
 	RouterMTU int
@@ -923,7 +923,7 @@ func (game *AttackDefenseGame) Run() error {
 		game.RouterMTU = 1420
 	}
 
-	game.Router = &WireguardRouter{
+	game.Router = &wireguardRouter{
 		serverUrl:     game.FrontendUrl(),
 		publicAddress: game.PublicIP,
 		mtu:           game.RouterMTU,
@@ -972,7 +972,7 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		if err := game.Router.restoreDevice(key, device); err != nil {
+		if err := game.Router.RestoreDevice(key, device); err != nil {
 			return err
 		}
 

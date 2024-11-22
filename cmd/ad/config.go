@@ -3,15 +3,18 @@ package main
 const CURRENT_CONFIG_VERSION = 1
 
 type ServiceConfig struct {
-	Id   int    `yaml:"id"`
-	Name string `yaml:"name"`
-	Port int    `yaml:"port"`
+	Id   int     `yaml:"id"`
+	Name string  `yaml:"name"`
+	Port int     `yaml:"port"`
+	Tags TagList `yaml:"tags"`
 }
 
 type VulnboxConfig struct {
 	Template     string          `yaml:"template"`
 	InitTemplate string          `yaml:"init"`
 	Services     []ServiceConfig `yaml:"services"`
+	Tags         TagList         `yaml:"tags"`
+	Flows        FlowList        `yaml:"flows"`
 	Bot          BotConfig       `yaml:"bot"`
 }
 
@@ -25,6 +28,13 @@ type BotConfig struct {
 	Enabled  bool     `yaml:"enabled"`
 	Template string   `yaml:"template"`
 	Events   EventMap `yaml:"events"`
+	Tags     TagList  `yaml:"tags"`
+	Flows    FlowList `yaml:"flows"`
+}
+
+type DeviceGlobalConfig struct {
+	Tags  TagList  `yaml:"tags"`
+	Flows FlowList `yaml:"flows"`
 }
 
 type ScoringConfig struct {

@@ -213,7 +213,11 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			}
 
 			for _, service := range game.Config.Vulnbox.Services {
-				teams[i].Services = append(teams[i].Services, serviceApiResponse(service))
+				teams[i].Services = append(teams[i].Services, serviceApiResponse{
+					Id:   service.Id,
+					Name: service.Name,
+					Port: service.Port,
+				})
 			}
 		}
 

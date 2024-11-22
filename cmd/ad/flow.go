@@ -5,42 +5,11 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+
+	"github.com/tinyrange/wireguard"
 )
 
-type TagList []string
-
-func (tags TagList) Contains(tag string) bool {
-	for _, t := range tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
-}
-
-func (tags TagList) ContainsMatchingPrefix(prefix string) bool {
-	for _, t := range tags {
-		if strings.HasPrefix(t, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func (tags TagList) ContainsAny(other TagList) bool {
-	for _, tag := range other {
-		if tags.Contains(tag) {
-			return true
-		}
-	}
-	return false
-}
-
 type ReplaceFunc func(string) (string, error)
-
-type NetHandler interface {
-	HandleConn(network string, ip net.IP, port uint16, conn net.Conn)
-}
 
 type FlowListener interface {
 	AcceptConn(target Instance, service Service, conn net.Conn)
@@ -147,7 +116,7 @@ func (f flowRouterHandler) HandleConn(network string, ip net.IP, port uint16, co
 }
 
 var (
-	_ NetHandler = flowRouterHandler(nil)
+	_ wireguard.NetHandler = flowRouterHandler(nil)
 )
 
 type FlowRouter struct {
@@ -188,7 +157,7 @@ func (r *FlowRouter) handleConnection(source Instance, target Instance, service 
 	return false
 }
 
-func (r *FlowRouter) AddInstance(instance Instance) (NetHandler, error) {
+func (r *FlowRouter) AddInstance(instance Instance) (wireguard.NetHandler, error) {
 	if _, ok := r.instances[instance.Id()]; ok {
 		return nil, fmt.Errorf("instance already exists: %s", instance.Id())
 	}

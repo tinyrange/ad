@@ -64,8 +64,6 @@ device:
 scorebot:
   template: scorebot/scorebot.yml
   
-  config_file: game.json
-  
   # Services is a list of services to check.
   services:
     - id: 0

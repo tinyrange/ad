@@ -73,8 +73,10 @@ func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame,
 
 type ScoreBotConfig struct {
 	Template    string                   `yaml:"template"`
-	HealthCheck string                   `yaml:"health_check"`
 	Services    []*ScoreBotServiceConfig `yaml:"services"`
+	Tags        TagList                  `yaml:"tags"`
+	Flows       FlowList                 `yaml:"flows"`
+	HealthCheck string                   `yaml:"health_check"`
 
 	instance *TinyRangeInstance
 }
