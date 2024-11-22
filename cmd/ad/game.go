@@ -120,7 +120,7 @@ type AttackDefenseGame struct {
 	tinyRangeTemplates map[string]string
 
 	// instances is a list of TinyRange instances.
-	instances []*TinyRangeInstance
+	instances []TinyRangeInstance
 
 	// SshServer is the SSH server used for admin connections.
 	SshServer string
@@ -147,19 +147,19 @@ func (game *AttackDefenseGame) FrontendUrl() string {
 	return fmt.Sprintf("http://%s:%d", game.PublicIP, game.PublicPort)
 }
 
-func (game *AttackDefenseGame) ScoreBotInstance() string {
+func (game *AttackDefenseGame) ScoreBotInstanceId() string {
 	if game.Config.ScoreBot.instance == nil {
 		return ""
 	}
 
-	return game.Config.ScoreBot.instance.instanceId
+	return game.Config.ScoreBot.instance.InstanceId()
 }
 
 func (game *AttackDefenseGame) ResolvePath(path string) string {
 	return filepath.Join(game.Config.basePath, path)
 }
 
-func (game *AttackDefenseGame) getInstance(id string) (*TinyRangeInstance, error) {
+func (game *AttackDefenseGame) getInstance(id string) (TinyRangeInstance, error) {
 	for _, inst := range game.instances {
 		if inst.InstanceId() == id {
 			return inst, nil
@@ -169,7 +169,7 @@ func (game *AttackDefenseGame) getInstance(id string) (*TinyRangeInstance, error
 	return nil, fmt.Errorf("instance not found")
 }
 
-func (game *AttackDefenseGame) getInstances() []*TinyRangeInstance {
+func (game *AttackDefenseGame) getInstances() []TinyRangeInstance {
 	return game.instances
 }
 
@@ -206,7 +206,7 @@ func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) er
 	for _, service := range game.Config.Vulnbox.Services {
 		// Connect the scoring machine to the team.
 		if err := game.Router.AddSimpleForwarder(
-			game.ScoreBotInstance(), ipPort(info.IP, service.Port),
+			game.ScoreBotInstanceId(), ipPort(info.IP, service.Port),
 			info.InstanceId, ipPort(VM_IP, service.Port),
 		); err != nil {
 			return err
@@ -436,7 +436,7 @@ func (game *AttackDefenseGame) generateWireguardConfig() (string, string, error)
 	return instanceId, configUrl, nil
 }
 
-func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFilename string) (*TinyRangeInstance, error) {
+func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFilename string) (TinyRangeInstance, error) {
 	// Check if the template is already cached.
 	if err := game.ensureTemplateCached(templateFilename); err != nil {
 		return nil, err
@@ -451,10 +451,7 @@ func (game *AttackDefenseGame) startInstanceFromTemplate(name string, templateFi
 	slog.Info("starting instance", "template", templateFilename, "instance", instanceId, "name", name)
 
 	// Start the instance.
-	inst := &TinyRangeInstance{
-		game: game,
-		name: name,
-	}
+	inst := NewTinyRangeInstance(game, name)
 
 	secureSSHPath, err := game.Persist.EnsurePath("ssh", name)
 	if err != nil {
@@ -794,7 +791,7 @@ func (game *AttackDefenseGame) GenerateKeys() error {
 	return nil
 }
 
-func (game *AttackDefenseGame) instanceFromName(name string) (*TinyRangeInstance, error) {
+func (game *AttackDefenseGame) instanceFromName(name string) (TinyRangeInstance, error) {
 	if name == "scorebot" {
 		return game.Config.ScoreBot.instance, nil
 	}
@@ -869,7 +866,7 @@ func (game *AttackDefenseGame) startSshServer() error {
 							return
 						}
 
-						other, err := instance.Dial("tcp", VM_SSH_IP_PORT)
+						other, err := game.DialContext(context.Background(), instance.InstanceId(), "tcp", VM_SSH_IP_PORT)
 						if err != nil {
 							_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("failed to dial instance: %s", err))
 							return

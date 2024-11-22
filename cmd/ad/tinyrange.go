@@ -25,7 +25,19 @@ type SecureSSHConfig struct {
 	Password  string `json:"ssh_password"`
 }
 
-type TinyRangeInstance struct {
+type TinyRangeInstance interface {
+	Name() string
+	InstanceId() string
+	SecureConfig() (SecureSSHConfig, error)
+
+	Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error
+	Stop() error
+
+	RunCommand(ctx context.Context, command string) (string, error)
+	WebSSHHandler(ws *websocket.Conn) error
+}
+
+type tinyRangeInstance struct {
 	mtx             sync.Mutex
 	game            *AttackDefenseGame
 	cmd             *exec.Cmd
@@ -36,7 +48,7 @@ type TinyRangeInstance struct {
 	sshClientConfig *ssh.ClientConfig
 }
 
-func (t *TinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
+func (t *tinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
 	if _, err := t.clientConfig(); err != nil {
 		return SecureSSHConfig{}, err
 	}
@@ -44,7 +56,7 @@ func (t *TinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
 	return t.secureConfig, nil
 }
 
-func (t *TinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
+func (t *tinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
@@ -93,23 +105,15 @@ func (t *TinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
 	return t.sshClientConfig, nil
 }
 
-func (t *TinyRangeInstance) Name() string {
+func (t *tinyRangeInstance) Name() string {
 	return t.name
 }
 
-func (t *TinyRangeInstance) InstanceId() string {
+func (t *tinyRangeInstance) InstanceId() string {
 	return t.instanceId
 }
 
-func (t *TinyRangeInstance) Dial(network, address string) (net.Conn, error) {
-	return t.DialContext(context.Background(), network, address)
-}
-
-func (t *TinyRangeInstance) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	return t.game.Router.DialContext(ctx, t.instanceId, network, address)
-}
-
-func (t *TinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error {
+func (t *tinyRangeInstance) Start(templateName string, instanceId string, wireguardConfigUrl string, secureSSHPath string) error {
 	// Load the template.
 	template, ok := t.game.getCachedTemplate(templateName)
 	if !ok {
@@ -144,13 +148,10 @@ func (t *TinyRangeInstance) Start(templateName string, instanceId string, wiregu
 	return nil
 }
 
-func (t *TinyRangeInstance) RunCommand(command string, timeout time.Duration) (string, error) {
+func (t *tinyRangeInstance) RunCommand(ctx context.Context, command string) (string, error) {
 	if t.game == nil || t.cmd == nil {
 		return "", fmt.Errorf("instance not started")
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	// slog.Info("running command", "instance", t.instanceId, "command", command)
 
@@ -231,7 +232,7 @@ var (
 	_ io.WriteCloser = &webSocketWriter{}
 )
 
-func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
+func (t *tinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 	config, err := t.clientConfig()
 	if err != nil {
 		return fmt.Errorf("failed to get client config: %w", err)
@@ -248,7 +249,7 @@ func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
 
-		conn, err = t.DialContext(ctx, "tcp", VM_SSH_IP_PORT)
+		conn, err = t.game.DialContext(ctx, t.InstanceId(), "tcp", VM_SSH_IP_PORT)
 		if err != nil {
 			if !errors.Is(err, context.DeadlineExceeded) {
 				slog.Debug("failed to connect", "err", err)
@@ -346,7 +347,7 @@ func (t *TinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 	}
 }
 
-func (t *TinyRangeInstance) Stop() error {
+func (t *tinyRangeInstance) Stop() error {
 	if t.cmd == nil {
 		return fmt.Errorf("instance not started")
 	}
@@ -362,4 +363,11 @@ func (t *TinyRangeInstance) Stop() error {
 	}
 
 	return nil
+}
+
+func NewTinyRangeInstance(game *AttackDefenseGame, name string) TinyRangeInstance {
+	return &tinyRangeInstance{
+		game: game,
+		name: name,
+	}
 }

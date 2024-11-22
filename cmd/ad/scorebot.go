@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -56,7 +57,10 @@ func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame,
 		return false, "", err
 	}
 
-	resp, err := sb.instance.RunCommand(buf.String(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := sb.instance.RunCommand(ctx, buf.String())
 	if err != nil {
 		// This is considered a internal error.
 		return false, "", err
@@ -78,7 +82,7 @@ type ScoreBotConfig struct {
 	Flows       FlowList                 `yaml:"flows"`
 	HealthCheck string                   `yaml:"health_check"`
 
-	instance *TinyRangeInstance
+	instance TinyRangeInstance
 }
 
 func (v *ScoreBotConfig) Stop() error {
@@ -104,7 +108,10 @@ func (v *ScoreBotConfig) Start(game *AttackDefenseGame) error {
 
 func (v *ScoreBotConfig) Wait() error {
 	for {
-		resp, err := v.instance.RunCommand(v.HealthCheck, 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		resp, err := v.instance.RunCommand(ctx, v.HealthCheck)
 		if err == nil && resp == "healthy" {
 			slog.Info("scorebot healthy")
 			return nil

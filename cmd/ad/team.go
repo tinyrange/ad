@@ -7,6 +7,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 type TargetInfo struct {
@@ -21,8 +23,8 @@ type Team struct {
 	ID          int
 	DisplayName string
 
-	teamInstance *TinyRangeInstance
-	botInstance  *TinyRangeInstance
+	teamInstance TinyRangeInstance
+	botInstance  TinyRangeInstance
 }
 
 func (t *Team) BotId() int { return BOT_ID_OFFSET + t.ID }
@@ -39,14 +41,14 @@ func (t *Team) InstanceId() string {
 	if t.teamInstance == nil {
 		return ""
 	}
-	return t.teamInstance.instanceId
+	return t.teamInstance.InstanceId()
 }
 
 func (t *Team) BotInstanceId() string {
 	if t.botInstance == nil {
 		return ""
 	}
-	return t.botInstance.instanceId
+	return t.botInstance.InstanceId()
 }
 
 func (t *Team) IP() string {
@@ -112,7 +114,10 @@ func (t *Team) runBotCommand(game *AttackDefenseGame, teamInfo TargetInfo, botIn
 	}
 
 	// Run the command.
-	resp, err := t.botInstance.RunCommand(buf.String(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := t.botInstance.RunCommand(ctx, buf.String())
 	if err != nil {
 		return fmt.Errorf("failed to run bot command(%w): %s", err, resp)
 	}
@@ -141,12 +146,15 @@ func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error 
 	}
 
 	// Run the init command.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	var resp string
 
 	if !target.IsBot {
-		resp, err = t.teamInstance.RunCommand(buf.String(), 10*time.Second)
+		resp, err = t.teamInstance.RunCommand(ctx, buf.String())
 	} else {
-		resp, err = t.botInstance.RunCommand(buf.String(), 10*time.Second)
+		resp, err = t.botInstance.RunCommand(ctx, buf.String())
 	}
 	if err != nil {
 		return fmt.Errorf("failed to run init command: %w %s", err, resp)
