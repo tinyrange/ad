@@ -95,7 +95,7 @@ func (t *Team) Stop() error {
 	return nil
 }
 
-func (t *Team) runBotCommand(game *AttackDefenseGame, teamInfo TargetInfo, botInfo TargetInfo, command string) error {
+func (t *Team) runBotCommand(ctx context.Context, game *AttackDefenseGame, teamInfo TargetInfo, botInfo TargetInfo, command string) error {
 	commandTpl, err := template.New("command").Parse(command)
 	if err != nil {
 		return err
@@ -114,9 +114,6 @@ func (t *Team) runBotCommand(game *AttackDefenseGame, teamInfo TargetInfo, botIn
 	}
 
 	// Run the command.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	resp, err := t.botInstance.RunCommand(ctx, buf.String())
 	if err != nil {
 		return fmt.Errorf("failed to run bot command(%w): %s", err, resp)

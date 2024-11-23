@@ -504,13 +504,13 @@ func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, c
 }
 
 // RunEvent runs the event with the given name.
-func (game *AttackDefenseGame) RunEvent(name string) error {
+func (game *AttackDefenseGame) RunEvent(ctx context.Context, name string) error {
 	ev, ok := game.Events[name]
 	if !ok {
 		return fmt.Errorf("event %s not implemented", name)
 	}
 
-	return ev.Run(game)
+	return ev.Run(ctx, game)
 }
 
 // TotalTicks returns the total number of ticks in the game.
@@ -538,41 +538,63 @@ func (game *AttackDefenseGame) RemoveEvent(name string) {
 }
 
 // ForAllTeams runs the given function for each team in the game.
-func (game *AttackDefenseGame) ForAllTeams(includeBots bool, f func(t *Team, info TargetInfo) error) error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(game.Teams))
-
-	for _, team := range game.Teams {
-		wg.Add(1)
-		go func(team *Team) {
-			defer wg.Done()
-			if err := f(team, team.Info()); err != nil {
-				slog.Error("failed to run function for team", "team id", team.ID, "err", err)
-				errChan <- err
-			}
-		}(team)
-
-		if includeBots && game.Config.Vulnbox.Bot.Enabled {
-			wg.Add(1)
-
+func (game *AttackDefenseGame) ForAllTeams(includeBots bool, background bool, f func(t *Team, info TargetInfo) error) error {
+	if background {
+		for _, team := range game.Teams {
 			go func(team *Team) {
-				defer wg.Done()
-				if err := f(team, team.BotInfo()); err != nil {
-					slog.Error("failed to run function for bot", "team id", team.ID, "err", err)
-					errChan <- err
+				if err := f(team, team.Info()); err != nil {
+					slog.Error("failed to run function for team", "team id", team.ID, "err", err)
 				}
 			}(team)
 		}
+
+		if includeBots && game.Config.Vulnbox.Bot.Enabled {
+			for _, team := range game.Teams {
+				go func(team *Team) {
+					if err := f(team, team.BotInfo()); err != nil {
+						slog.Error("failed to run function for bot", "team id", team.ID, "err", err)
+					}
+				}(team)
+			}
+		}
+
+		return nil
+	} else {
+		var wg sync.WaitGroup
+		errChan := make(chan error, len(game.Teams))
+
+		for _, team := range game.Teams {
+			wg.Add(1)
+			go func(team *Team) {
+				defer wg.Done()
+				if err := f(team, team.Info()); err != nil {
+					slog.Error("failed to run function for team", "team id", team.ID, "err", err)
+					errChan <- err
+				}
+			}(team)
+
+			if includeBots && game.Config.Vulnbox.Bot.Enabled {
+				wg.Add(1)
+
+				go func(team *Team) {
+					defer wg.Done()
+					if err := f(team, team.BotInfo()); err != nil {
+						slog.Error("failed to run function for bot", "team id", team.ID, "err", err)
+						errChan <- err
+					}
+				}(team)
+			}
+		}
+
+		wg.Wait()
+		close(errChan)
+
+		if len(errChan) > 0 {
+			return fmt.Errorf("failed to run function for all teams")
+		}
+
+		return nil
 	}
-
-	wg.Wait()
-	close(errChan)
-
-	if len(errChan) > 0 {
-		return fmt.Errorf("failed to run function for all teams")
-	}
-
-	return nil
 }
 
 func (game *AttackDefenseGame) setServiceOverallScore(service *ServiceState) {
@@ -742,6 +764,9 @@ func (game *AttackDefenseGame) Tick() error {
 
 	slog.Info("tick", "num", game.CurrentTick)
 
+	ctx, cancel := context.WithTimeout(context.Background(), game.scaleDuration(game.Config.TickRate.Duration))
+	defer cancel()
+
 	start := time.Now()
 
 	if err := game.updateScoreboard(); err != nil {
@@ -752,14 +777,14 @@ func (game *AttackDefenseGame) Tick() error {
 	// Run any events that are scheduled for this tick at the start of the tick.
 	for _, ev := range game.EventQueue {
 		if ev.Tick(game) == game.CurrentTick {
-			if err := ev.Run(game); err != nil {
+			if err := ev.Run(ctx, game); err != nil {
 				slog.Error("failed to run event", "name", ev.Event, "err", err)
 			}
 		}
 	}
 
 	// Send the scorebot command to each team.
-	if err := game.ForAllTeams(true, func(t *Team, info TargetInfo) error {
+	if err := game.ForAllTeams(true, false, func(t *Team, info TargetInfo) error {
 		start := time.Now()
 
 		// Run the scorebot for each service.
@@ -771,9 +796,12 @@ func (game *AttackDefenseGame) Tick() error {
 
 			time.Sleep(delay)
 
+			subCtx, cancel := context.WithTimeout(ctx, game.scaleDuration(service.Timeout.Duration))
+			defer cancel()
+
 			newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, service.Id, game.Signer)
 
-			success, message, err := service.Run(&game.Config.ScoreBot, game, info, newFlag)
+			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag)
 			if err != nil {
 				return err
 			}
@@ -988,9 +1016,12 @@ func (game *AttackDefenseGame) Run() error {
 	// Register events for the game.
 	if game.Config.Vulnbox.Bot.Enabled {
 		for name, ev := range game.Config.Vulnbox.Bot.Events {
-			game.AddEvent(fmt.Sprintf("bot/%s", name), func(game *AttackDefenseGame) error {
-				return game.ForAllTeams(false, func(t *Team, info TargetInfo) error {
-					return t.runBotCommand(game, t.Info(), t.BotInfo(), ev.Command)
+			game.AddEvent(fmt.Sprintf("bot/%s", name), func(ctx context.Context, game *AttackDefenseGame) error {
+				return game.ForAllTeams(false, ev.Background, func(t *Team, info TargetInfo) error {
+					subCtx, cancel := context.WithTimeout(ctx, game.scaleDuration(ev.Timeout.Duration))
+					defer cancel()
+
+					return t.runBotCommand(subCtx, game, t.Info(), t.BotInfo(), ev.Command)
 				})
 			})
 		}
@@ -1046,7 +1077,7 @@ func (game *AttackDefenseGame) Run() error {
 	}
 
 	// Initialize all initial teams.
-	if err := game.ForAllTeams(false, func(t *Team, info TargetInfo) error {
+	if err := game.ForAllTeams(false, false, func(t *Team, info TargetInfo) error {
 		return t.Start(game)
 	}); err != nil {
 		return fmt.Errorf("failed to start all teams: %w", err)
@@ -1065,7 +1096,7 @@ func (game *AttackDefenseGame) Run() error {
 
 		start := make(chan struct{})
 
-		game.AddEvent("start", func(game *AttackDefenseGame) error {
+		game.AddEvent("start", func(ctx context.Context, game *AttackDefenseGame) error {
 			close(start)
 			game.RemoveEvent("start")
 			return nil

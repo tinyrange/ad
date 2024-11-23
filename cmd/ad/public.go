@@ -287,7 +287,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 		name := r.FormValue("name")
 
-		if err := game.RunEvent(name); err != nil {
+		if err := game.RunEvent(r.Context(), name); err != nil {
 			slog.Error("failed to run event", "err", err)
 			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)

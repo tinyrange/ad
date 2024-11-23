@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -53,7 +54,7 @@ var (
 	_ yaml.Unmarshaler = &Duration{}
 )
 
-type EventCallback func(game *AttackDefenseGame) error
+type EventCallback func(ctx context.Context, game *AttackDefenseGame) error
 
 type Event struct {
 	Run EventCallback

@@ -11,8 +11,9 @@ import (
 )
 
 type ScoreBotServiceConfig struct {
-	Id      int    `yaml:"id"`
-	Command string `yaml:"command"`
+	Id      int      `yaml:"id"`
+	Command string   `yaml:"command"`
+	Timeout Duration `yaml:"timeout"`
 
 	mtx sync.Mutex
 	tpl *template.Template
@@ -39,7 +40,7 @@ type scoreBotResponse struct {
 	Message string `json:"message"`
 }
 
-func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
+func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
 	tpl, err := v.getTemplate()
 	if err != nil {
 		return false, "", err
@@ -56,9 +57,6 @@ func (v *ScoreBotServiceConfig) Run(sb *ScoreBotConfig, game *AttackDefenseGame,
 	}); err != nil {
 		return false, "", err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	resp, err := sb.instance.RunCommand(ctx, buf.String())
 	if err != nil {

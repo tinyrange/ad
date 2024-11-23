@@ -42,6 +42,8 @@ vulnbox:
     events:
       vuln1:
         command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+        timeout: 2s
+        background: true
 
     # Bots are not tagged the same as regular teams so they can't be targeted except explicitly by their own team.
     tags:
@@ -68,6 +70,7 @@ scorebot:
   services:
     - id: 0
       command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+      timeout: 1s
 
   tags:
     - scorebot/scorebot

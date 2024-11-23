@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -47,7 +48,9 @@ type VulnboxConfig struct {
 }
 
 type EventDefinition struct {
-	Command string `yaml:"command"`
+	Command    string   `yaml:"command"`
+	Timeout    Duration `yaml:"timeout"`
+	Background bool     `yaml:"background"`
 }
 
 type EventMap map[string]EventDefinition
@@ -78,8 +81,8 @@ func (tl *TimelineEvent) Tick(game *AttackDefenseGame) int64 {
 	return tl.At.Nanoseconds() / game.Config.TickRate.Nanoseconds()
 }
 
-func (tl *TimelineEvent) Run(game *AttackDefenseGame) error {
-	return game.RunEvent(tl.Event)
+func (tl *TimelineEvent) Run(ctx context.Context, game *AttackDefenseGame) error {
+	return game.RunEvent(ctx, tl.Event)
 }
 
 type PageConfig struct {
