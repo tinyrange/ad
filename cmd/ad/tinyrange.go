@@ -9,13 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
@@ -30,10 +30,9 @@ type SecureSSHConfig struct {
 type TinyRangeInstance interface {
 	FlowInstance
 
-	InstanceId() string
 	SecureConfig() (SecureSSHConfig, error)
 
-	Start(templateName string, wireguardConfigUrl string, secureSSHPath string) error
+	Start(templateName string, wg WireguardInstance, secureSSHPath string) error
 	Stop() error
 
 	RunCommand(ctx context.Context, command string) (string, error)
@@ -42,37 +41,55 @@ type TinyRangeInstance interface {
 	ParseFlows(f ReplaceFunc) error
 	AddService(service FlowService)
 
-	AcceptConn(service FlowService, conn net.Conn)
+	AcceptConn(source FlowInstance, service FlowService, conn net.Conn)
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+
+	HealthCheck(check HealthCheckConfig, templateFunc func(s string) (string, error)) error
 }
 
 type tinyRangeInstance struct {
 	mtx             sync.Mutex
 	game            *AttackDefenseGame
+	wg              WireguardInstance
 	config          InstanceConfig
 	cmd             *exec.Cmd
 	name            string
-	instanceId      string
 	secureSSHPath   string
 	secureConfig    SecureSSHConfig
 	sshClientConfig *ssh.ClientConfig
 	address         net.IP
 	services        []FlowService
 	flows           []ParsedFlow
+	tags            TagList
+}
+
+func (t *tinyRangeInstance) String() string {
+	return t.name
 }
 
 // AcceptConn implements TinyRangeInstance.
-func (t *tinyRangeInstance) AcceptConn(service FlowService, conn net.Conn) {
-	defer conn.Close()
+func (t *tinyRangeInstance) AcceptConn(source FlowInstance, service FlowService, conn net.Conn) {
+	slog.Debug("accepting connection", "source", source, "service", service)
 
-	other, err := t.game.Router.DialContext(context.Background(), t.instanceId, "tcp", ipPort(VM_IP, service.Port()))
+	other, err := t.DialContext(context.Background(), "tcp", fmt.Sprintf("%s:%d", t.address.String(), service.Port()))
 	if err != nil {
-		slog.Error("failed to dial", "err", err)
+		conn.Close()
+		slog.Error("failed to dial target", "error", err)
 		return
 	}
 
-	if err := common.Proxy(conn, other, 1400); err != nil {
-		slog.Error("failed to proxy", "err", err)
-	}
+	go func() {
+		defer other.Close()
+
+		if err := common.Proxy(other, conn, t.game.RouterMTU); err != nil {
+			slog.Debug("proxy error", "error", err)
+		}
+	}()
+}
+
+// DialContext implements TinyRangeInstance.
+func (t *tinyRangeInstance) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
+	return t.wg.DialContext(ctx, network, address)
 }
 
 // ParseFlows implements TinyRangeInstance.
@@ -82,7 +99,13 @@ func (t *tinyRangeInstance) ParseFlows(f ReplaceFunc) error {
 		return err
 	}
 
+	tags, err := t.config.Tags.Parse(f)
+	if err != nil {
+		return err
+	}
+
 	t.flows = flows
+	t.tags = tags
 
 	return nil
 }
@@ -109,7 +132,7 @@ func (t *tinyRangeInstance) Services() []FlowService {
 
 // Tags implements TinyRangeInstance.
 func (t *tinyRangeInstance) Tags() TagList {
-	return t.config.Tags
+	return t.tags
 }
 
 func (t *tinyRangeInstance) SecureConfig() (SecureSSHConfig, error) {
@@ -163,7 +186,7 @@ func (t *tinyRangeInstance) clientConfig() (*ssh.ClientConfig, error) {
 			HostKeyCallback: ssh.FixedHostKey(hostKey),
 		}
 
-		slog.Info("created ssh client config", "instance", t.instanceId)
+		slog.Info("created ssh client config", "instance", t.Hostname())
 	}
 
 	return t.sshClientConfig, nil
@@ -173,11 +196,7 @@ func (t *tinyRangeInstance) Hostname() string {
 	return t.name
 }
 
-func (t *tinyRangeInstance) InstanceId() string {
-	return t.instanceId
-}
-
-func (t *tinyRangeInstance) Start(templateName string, wireguardConfigUrl string, secureSSHPath string) error {
+func (t *tinyRangeInstance) Start(templateName string, wg WireguardInstance, secureSSHPath string) error {
 	// Load the template.
 	template, ok := t.game.getCachedTemplate(templateName)
 	if !ok {
@@ -186,7 +205,7 @@ func (t *tinyRangeInstance) Start(templateName string, wireguardConfigUrl string
 
 	args := []string{
 		t.game.TinyRangePath, "run-vm",
-		"--wireguard", wireguardConfigUrl,
+		"--wireguard", wg.ConfigUrl(),
 		"--secure-ssh", secureSSHPath,
 	}
 
@@ -207,6 +226,7 @@ func (t *tinyRangeInstance) Start(templateName string, wireguardConfigUrl string
 
 	t.cmd = cmd
 	t.secureSSHPath = secureSSHPath
+	t.wg = wg
 
 	return nil
 }
@@ -219,7 +239,7 @@ func (t *tinyRangeInstance) RunCommand(ctx context.Context, command string) (str
 	// slog.Info("running command", "instance", t.instanceId, "command", command)
 
 	// Use game.Dial to connect to the instance.
-	conn, err := t.game.DialContext(ctx, t.instanceId, "tcp", VM_SSH_IP_PORT)
+	conn, err := t.game.DialContext(ctx, nil, "tcp", ipPort(t.address.String(), VM_SSH_PORT))
 	if err != nil {
 		return "", fmt.Errorf("failed to dial instance: %w", err)
 	}
@@ -232,7 +252,7 @@ func (t *tinyRangeInstance) RunCommand(ctx context.Context, command string) (str
 
 	// The instance is listening on SSH on port 2222.
 	// Use the hardcoded password "insecurepassword" to login.
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, VM_SSH_IP_PORT, config)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, ipPort(VM_IP, VM_SSH_PORT), config)
 	if err != nil {
 		return "", fmt.Errorf("failed to create ssh client: %w", err)
 	}
@@ -255,6 +275,52 @@ func (t *tinyRangeInstance) RunCommand(ctx context.Context, command string) (str
 	// slog.Info("command output", "instance", t.instanceId, "output", string(out))
 
 	return string(out), nil
+}
+
+func (t *tinyRangeInstance) HealthCheck(check HealthCheckConfig, templateFunc func(s string) (string, error)) error {
+	switch check.Kind {
+	case HealthCheckKindHTTP:
+		client := http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return t.game.DialContext(ctx, nil, network, address)
+				},
+			},
+		}
+
+		url, err := templateFunc(check.URL)
+		if err != nil {
+			return fmt.Errorf("failed to parse url: %w", err)
+		}
+
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to perform request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read body: %w", err)
+		}
+
+		if string(body) != check.ExpectedOutput {
+			return fmt.Errorf("unexpected body: '%s' != '%s'", body, check.ExpectedOutput)
+		}
+
+		return nil
+	default:
+		return fmt.Errorf("unsupported health check kind: %s", check.Kind)
+	}
 }
 
 type webSocketWriter struct {
@@ -312,7 +378,7 @@ func (t *tinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
 
-		conn, err = t.game.DialContext(ctx, t.InstanceId(), "tcp", VM_SSH_IP_PORT)
+		conn, err = t.game.DialContext(ctx, nil, "tcp", ipPort(t.Hostname(), VM_SSH_PORT))
 		if err != nil {
 			if !errors.Is(err, context.DeadlineExceeded) {
 				slog.Debug("failed to connect", "err", err)
@@ -320,7 +386,7 @@ func (t *tinyRangeInstance) WebSSHHandler(ws *websocket.Conn) error {
 			continue
 		}
 
-		c, chans, reqs, err = ssh.NewClientConn(conn, VM_SSH_IP_PORT, config)
+		c, chans, reqs, err = ssh.NewClientConn(conn, ipPort(VM_IP, VM_SSH_PORT), config)
 		if err != nil {
 			if !errors.Is(err, context.DeadlineExceeded) {
 				slog.Debug("failed to connect", "err", err)
@@ -430,9 +496,9 @@ func (t *tinyRangeInstance) Stop() error {
 
 func NewTinyRangeInstance(game *AttackDefenseGame, name string, ip net.IP, config InstanceConfig) TinyRangeInstance {
 	return &tinyRangeInstance{
-		instanceId: uuid.NewString(),
-		game:       game,
-		name:       name,
-		config:     config,
+		game:    game,
+		name:    name,
+		address: ip,
+		config:  config,
 	}
 }

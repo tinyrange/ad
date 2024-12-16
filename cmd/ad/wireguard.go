@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -11,55 +13,58 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tinyrange/ad/pkg/common"
 	"github.com/tinyrange/wireguard"
 )
 
-type wireguardInstance struct {
-	wg         *wireguard.Wireguard
-	handler    *wireguard.SimpleFlowHandler
-	peerConfig string
-	isDevice   bool
-	deviceId   int
-	name       string
-}
+func generateRandomString(length int) (string, error) {
+	b := make([]byte, length)
 
-func (w *wireguardInstance) DeviceIP() string {
-	return net.IPv4(10, 40, 30, 1+byte(w.deviceId)).String()
-}
-
-func (w *wireguardInstance) addSimpleListener(addr string, cb func(net.Conn)) error {
-	listen, err := w.handler.ListenTCPAddr(addr)
-	if err != nil {
-		return err
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
 
-	go func() {
-		for {
-			conn, err := listen.Accept()
-			if err != nil {
-				slog.Error("failed to accept connection", "err", err)
-				continue
-			}
-
-			go cb(conn)
-		}
-	}()
-
-	return nil
+	return hex.EncodeToString(b), nil
 }
 
+type WireguardInstance interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+	ConfigUrl() string
+}
+
+type wireguardInstance struct {
+	wg         *wireguard.Wireguard
+	internalIp string
+	configUrl  string
+}
+
+// DialContext implements WireguardInstance.
+func (w *wireguardInstance) DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+
+	if w.internalIp != "" {
+		host = w.internalIp
+	}
+
+	slog.Debug("dialing wireguard", "host", host, "port", port)
+
+	return w.wg.DialContext(ctx, network, net.JoinHostPort(host, port))
+}
+
+func (w *wireguardInstance) ConfigUrl() string {
+	return w.configUrl
+}
+
+var (
+	_ WireguardInstance = &wireguardInstance{}
+)
+
 type WireguardRouter interface {
-	AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error
-	AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error
-	AddListener(instanceId, addr string) (net.Listener, error)
-
-	DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error)
-
-	AddEndpoint(instanceId string) (string, error)
-	AddDevice(instanceId string, name string) (config string, id int, err error)
-	RestoreDevice(name string, config DeviceConfig) error
-	GetDevices() []WireguardDevice
+	AddEndpoint(handler NetHandler, internalIp string) (WireguardInstance, error)
+	AddDevice(name string, handler NetHandler) (inst WireguardInstance, config string, err error)
+	RestoreDevice(name string, config string, handler NetHandler) (WireguardInstance, error)
 
 	RegisterMux(mux *http.ServeMux)
 }
@@ -70,183 +75,64 @@ type wireguardRouter struct {
 	publicAddress string
 	mtu           int
 	serverUrl     string
-	endpoints     map[string]*wireguardInstance
+	configSalt    string
+	configs       map[string]string
 }
 
-func (r *wireguardRouter) getInstance(instanceId string) (*wireguardInstance, error) {
+func (r *wireguardRouter) configKeyFromHostname(hostname string) string {
+	hash := sha256.New()
+	hash.Write([]byte(r.configSalt))
+	hash.Write([]byte(hostname))
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func (r *wireguardRouter) AddEndpoint(handler NetHandler, internalIp string) (WireguardInstance, error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
-	instance, ok := r.endpoints[instanceId]
-	if !ok {
-		return nil, fmt.Errorf("instance not found")
-	}
+	slog.Info("adding wireguard endpoint", "instance", handler)
 
-	return instance, nil
-}
-
-func (r *wireguardRouter) AddListener(instanceId, addr string) (net.Listener, error) {
-	instance, err := r.getInstance(instanceId)
-	if err != nil {
-		return nil, err
-	}
-
-	return instance.handler.ListenTCPAddr(addr)
-}
-
-func (r *wireguardRouter) AddSimpleListener(instanceId, addr string, cb func(net.Conn)) error {
-	instance, err := r.getInstance(instanceId)
-	if err != nil {
-		return err
-	}
-
-	return instance.addSimpleListener(addr, cb)
-}
-
-func (r *wireguardRouter) AddSimpleForwarder(source string, sourceAddr string, dest string, destAddr string) error {
-	sourceInstance, err := r.getInstance(source)
-	if err != nil {
-		return err
-	}
-
-	listen, err := sourceInstance.handler.ListenTCPAddr(sourceAddr)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		for {
-			conn, err := listen.Accept()
-			if err != nil {
-				slog.Error("failed to accept connection", "err", err)
-				continue
-			}
-
-			go func() {
-				destInstance, err := r.getInstance(dest)
-				if err != nil {
-					slog.Error("failed to get dest instance", "err", err)
-					return
-				}
-
-				otherConn, err := destInstance.wg.Dial("tcp", destAddr)
-				if err != nil {
-					slog.Error("failed to dial", "err", err)
-					return
-				}
-
-				go common.Proxy(conn, otherConn, 4096)
-			}()
-		}
-	}()
-
-	return nil
-}
-
-func (r *wireguardRouter) AddEndpoint(instanceId string) (string, error) {
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
-
-	slog.Info("adding wireguard endpoint", "instance", instanceId)
-
-	handler := wireguard.NewSimpleFlowHandler()
 	wg, err := wireguard.NewServer(HOST_IP, r.mtu, handler)
 	if err != nil {
-		return "", err
-	}
-
-	listen, err := handler.ListenTCPAddr("8.8.8.8:80")
-	if err != nil {
-		return "", err
-	}
-	go func() {
-		for {
-			conn, err := listen.Accept()
-			if err != nil {
-				slog.Error("failed to accept connection", "err", err)
-				continue
-			}
-
-			conn.Close()
-		}
-	}()
-
-	r.endpoints[instanceId] = &wireguardInstance{
-		wg:      wg,
-		handler: handler,
+		return nil, err
 	}
 
 	peerConfig, err := wg.CreatePeer(r.publicAddress)
 	if err != nil {
-		return "", err
-	}
-
-	r.endpoints[instanceId].peerConfig = peerConfig
-
-	return fmt.Sprintf("%s/wireguard/%s", r.serverUrl, instanceId), nil
-}
-
-func (r *wireguardRouter) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
-	// slog.Info("dialing", "instance", instanceId, "network", network, "address", address)
-
-	instance, err := r.getInstance(instanceId)
-	if err != nil {
 		return nil, err
 	}
 
-	return instance.wg.DialContext(ctx, network, address)
+	configKey := r.configKeyFromHostname(handler.Hostname())
+
+	r.configs[configKey] = peerConfig
+
+	return &wireguardInstance{wg: wg, internalIp: internalIp, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}, nil
 }
 
 func (r *wireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) {
-	instanceId := req.PathValue("instance")
+	configKey := req.PathValue("config")
 
-	slog.Debug("serving wireguard config", "instance", instanceId)
+	slog.Debug("serving wireguard config", "config", configKey)
 
-	instance, err := r.getInstance(instanceId)
-	if err != nil {
-		http.Error(w, "instance not found", http.StatusNotFound)
+	config, ok := r.configs[configKey]
+	if !ok {
+		http.Error(w, "config not found", http.StatusNotFound)
 		return
 	}
 
 	// Set the content type to plain text
 	w.Header().Set("Content-Type", "text/plain")
 
-	// Set the file to download and set a filename
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", strings.ReplaceAll(instance.name, "-", "_")))
-
-	if _, err := w.Write([]byte(instance.peerConfig)); err != nil {
+	if _, err := w.Write([]byte(config)); err != nil {
 		slog.Error("failed to write config", "err", err)
 	}
 }
 
 func (r *wireguardRouter) RegisterMux(mux *http.ServeMux) {
-	mux.HandleFunc("GET /wireguard/{instance}", r.serveConfig)
+	mux.HandleFunc("GET /wireguard/{config}", r.serveConfig)
 }
 
-func (r *wireguardRouter) GetDevices() []WireguardDevice {
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
-
-	var devices []WireguardDevice
-
-	for instanceId, instance := range r.endpoints {
-		if !instance.isDevice {
-			continue
-		}
-
-		devices = append(devices, WireguardDevice{
-			ConfigKey: instanceId,
-			Config:    instance.peerConfig,
-			ID:        instance.deviceId,
-			Name:      instance.name,
-			IP:        instance.DeviceIP(),
-		})
-	}
-
-	return devices
-}
-
-func (r *wireguardRouter) translateToDeviceConfig(instance *wireguardInstance, peerConfig string) (string, error) {
+func (r *wireguardRouter) translateToDeviceConfig(ip string, peerConfig string) (string, error) {
 	var (
 		privateKey string
 		publicKey  string
@@ -302,7 +188,7 @@ PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s
 `,
-			instance.DeviceIP(), privateKey, r.mtu, publicKey, endpoint,
+			ip, privateKey, r.mtu, publicKey, endpoint,
 		)
 	} else {
 		config = fmt.Sprintf(`[Interface]
@@ -315,49 +201,40 @@ PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s:%s
 `,
-			instance.DeviceIP(), privateKey, r.mtu, publicKey, r.publicAddress, listenPort,
+			ip, privateKey, r.mtu, publicKey, r.publicAddress, listenPort,
 		)
 	}
 
 	return config, nil
 }
 
-func (r *wireguardRouter) AddDevice(instanceId string, name string) (config string, id int, err error) {
+func (r *wireguardRouter) AddDevice(name string, handler NetHandler) (inst WireguardInstance, config string, err error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
-	id = len(r.endpoints)
-
-	handler := wireguard.NewSimpleFlowHandler()
 	wg, err := wireguard.NewServer(HOST_IP, r.mtu, handler)
 	if err != nil {
-		return "", -1, err
-	}
-
-	r.endpoints[instanceId] = &wireguardInstance{
-		wg:       wg,
-		handler:  handler,
-		isDevice: true,
-		deviceId: id,
-		name:     name,
+		return nil, "", err
 	}
 
 	peerConfig, err := wg.CreatePeer(r.publicAddress)
 	if err != nil {
-		return "", -1, err
+		return nil, "", err
 	}
 
-	deviceConfig, err := r.translateToDeviceConfig(r.endpoints[instanceId], peerConfig)
+	deviceConfig, err := r.translateToDeviceConfig(handler.IpAddress().String(), peerConfig)
 	if err != nil {
-		return "", -1, err
+		return nil, "", err
 	}
 
-	r.endpoints[instanceId].peerConfig = deviceConfig
+	r.configs[r.configKeyFromHostname(handler.Hostname())] = deviceConfig
 
 	config, err = wg.GetConfig()
 	if err != nil {
-		return "", -1, err
+		return nil, "", err
 	}
+
+	inst = &wireguardInstance{wg: wg}
 
 	return
 }
@@ -385,46 +262,41 @@ func filterConfigToKeys(config string, keys []string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func (r *wireguardRouter) RestoreDevice(name string, config DeviceConfig) error {
+func (r *wireguardRouter) RestoreDevice(name string, config string, handler NetHandler) (WireguardInstance, error) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
-	newConfig, err := filterConfigToKeys(config.Config, []string{"private_key", "public_key", "listen_port", "allowed_ip", "protocol_version", "allowed_ip"})
+	newConfig, err := filterConfigToKeys(config, []string{"private_key", "public_key", "listen_port", "allowed_ip", "protocol_version", "allowed_ip"})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	handler := wireguard.NewSimpleFlowHandler()
 	wg, err := wireguard.NewFromConfig(HOST_IP, r.mtu, newConfig, handler)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	inst := &wireguardInstance{
-		wg:       wg,
-		handler:  handler,
-		isDevice: true,
-		deviceId: config.ID,
-		name:     name,
-	}
-
-	deviceConfig, err := r.translateToDeviceConfig(inst, config.Config)
+	deviceConfig, err := r.translateToDeviceConfig(handler.IpAddress().String(), config)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	r.endpoints[config.ConfigKey] = inst
+	r.configs[r.configKeyFromHostname(handler.Hostname())] = deviceConfig
 
-	inst.peerConfig = deviceConfig
-
-	return nil
+	return &wireguardInstance{wg: wg}, nil
 }
 
-func NewWireguardRouter(publicAddress string, mtu int, serverUrl string) WireguardRouter {
+func NewWireguardRouter(publicAddress string, mtu int, serverUrl string) (WireguardRouter, error) {
+	salt, err := generateRandomString(8)
+	if err != nil {
+		return nil, err
+	}
+
 	return &wireguardRouter{
 		publicAddress: publicAddress,
 		mtu:           mtu,
 		serverUrl:     serverUrl,
-		endpoints:     make(map[string]*wireguardInstance),
-	}
+		configs:       make(map[string]string),
+		configSalt:    salt,
+	}, nil
 }

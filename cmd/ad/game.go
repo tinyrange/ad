@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -18,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
 )
@@ -111,6 +109,9 @@ type AttackDefenseGame struct {
 	// Router is the wireguard router for the game.
 	Router WireguardRouter
 
+	// Flow is the flow router for the game.
+	Flow *FlowRouter
+
 	// RouterMTU is the MTU(Maximum Transmission Unit) for the router.
 	RouterMTU int
 
@@ -121,6 +122,9 @@ type AttackDefenseGame struct {
 
 	// instances is a list of TinyRange instances.
 	instances []TinyRangeInstance
+
+	// devices is a list of external devices in the game.
+	devices []*Device
 
 	// SshServer is the SSH server used for admin connections.
 	SshServer string
@@ -144,6 +148,7 @@ type AttackDefenseGame struct {
 
 	// internal services
 	internalWeb    *hostService
+	pingService    *hostService
 	flagSubmission *hostService
 }
 
@@ -167,6 +172,7 @@ func (game *AttackDefenseGame) InstanceAddress() net.IP {
 func (game *AttackDefenseGame) Services() []FlowService {
 	return []FlowService{
 		game.internalWeb,
+		game.pingService,
 		game.flagSubmission,
 	}
 }
@@ -180,26 +186,8 @@ func (game *AttackDefenseGame) FrontendUrl() string {
 	return fmt.Sprintf("http://%s:%d", game.PublicIP, game.PublicPort)
 }
 
-func (game *AttackDefenseGame) ScoreBotInstanceId() string {
-	if game.Config.ScoreBot.instance == nil {
-		return ""
-	}
-
-	return game.Config.ScoreBot.instance.InstanceId()
-}
-
 func (game *AttackDefenseGame) ResolvePath(path string) string {
 	return filepath.Join(game.Config.basePath, path)
-}
-
-func (game *AttackDefenseGame) getInstance(id string) (TinyRangeInstance, error) {
-	for _, inst := range game.instances {
-		if inst.InstanceId() == id {
-			return inst, nil
-		}
-	}
-
-	return nil, fmt.Errorf("instance not found")
 }
 
 func (game *AttackDefenseGame) getInstances() []TinyRangeInstance {
@@ -239,114 +227,6 @@ func (game *AttackDefenseGame) teamFromTag(tag string) (team *Team, bot bool, er
 	}
 
 	return nil, false, fmt.Errorf("team not found: %s", tag)
-}
-
-func (game *AttackDefenseGame) registerFlowsForTeam(t *Team, info TargetInfo) error {
-	for _, service := range game.Config.Vulnbox.Services {
-		// Connect the team machine to itself.
-		if err := game.Router.AddSimpleForwarder(
-			info.InstanceId, ipPort(info.IP, service.Port()),
-			info.InstanceId, ipPort(VM_IP, service.Port()),
-		); err != nil {
-			return err
-		}
-	}
-
-	// Run the init command.
-	if err := t.runInitCommand(game, info); err != nil {
-		return err
-	}
-
-	for _, service := range game.Config.Vulnbox.Services {
-		// Connect the scoring machine to the team.
-		if err := game.Router.AddSimpleForwarder(
-			game.ScoreBotInstanceId(), ipPort(info.IP, service.Port()),
-			info.InstanceId, ipPort(VM_IP, service.Port()),
-		); err != nil {
-			return err
-		}
-	}
-
-	// Connect the flag submission API to the team.
-	if err := game.Router.AddSimpleListener(info.InstanceId, FLAG_SUBMISSION_IP_PORT, func(conn net.Conn) {
-		// read each line from the connection
-		scanner := bufio.NewScanner(conn)
-		for scanner.Scan() {
-			flag := scanner.Text()
-
-			status := game.submitFlag(info, flag)
-
-			if status != FlagAccepted {
-				slog.Info("received invalid flag", "team", info.Name, "flag", flag, "status", status)
-			}
-
-			fmt.Fprintf(conn, "%s\n", status)
-		}
-	}); err != nil {
-		return err
-	}
-
-	internalWeb, err := game.Router.AddListener(info.InstanceId, INTERNAL_WEB_IP_PORT)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Add the team to the context for r.
-			ctx := context.WithValue(r.Context(), CONTEXT_KEY_TEAM, info)
-
-			// Serve the request.
-			game.privateServer.ServeHTTP(w, r.WithContext(ctx))
-		}))
-	}()
-
-	return nil
-}
-
-func (game *AttackDefenseGame) registerFlowsForDevice(deviceId string) error {
-	for _, team := range game.Teams {
-		for _, service := range game.Config.Vulnbox.Services {
-			// Connect the device to the team machine.
-			if err := game.Router.AddSimpleForwarder(
-				deviceId, ipPort(team.Info().IP, service.Port()),
-				team.Info().InstanceId, ipPort(VM_IP, service.Port()),
-			); err != nil {
-				return err
-			}
-		}
-
-		// Connect the device to the team machine SSH port.
-		if err := game.Router.AddSimpleForwarder(
-			deviceId, ipPort(team.Info().IP, 2222),
-			team.Info().InstanceId, ipPort(VM_IP, 2222),
-		); err != nil {
-			return err
-		}
-
-		// TODO: Check if the device belongs to a bot.
-		if game.Config.Vulnbox.Bot.Enabled {
-			for _, service := range game.Config.Vulnbox.Services {
-				// Connect the device to the bot machine.
-				if err := game.Router.AddSimpleForwarder(
-					deviceId, ipPort(team.BotInfo().IP, service.Port()),
-					team.BotInfo().InstanceId, ipPort(VM_IP, service.Port()),
-				); err != nil {
-					return err
-				}
-			}
-
-			// Connect the device to the bot machine SSH port.
-			if err := game.Router.AddSimpleForwarder(
-				deviceId, ipPort(team.BotInfo().IP, 2222),
-				team.BotInfo().InstanceId, ipPort(VM_IP, 2222),
-			); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }
 
 func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
@@ -469,10 +349,6 @@ func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) err
 	return nil
 }
 
-func (game *AttackDefenseGame) DialContext(ctx context.Context, instanceId string, network, address string) (net.Conn, error) {
-	return game.Router.DialContext(ctx, instanceId, network, address)
-}
-
 func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, config InstanceConfig) (TinyRangeInstance, error) {
 	// Check if the template is already cached.
 	if err := game.ensureTemplateCached(config.Template); err != nil {
@@ -482,11 +358,16 @@ func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, c
 	// Start the instance.
 	inst := NewTinyRangeInstance(game, name, net.ParseIP(ip), config)
 
-	slog.Info("starting instance", "template", config.Template, "instance", inst.InstanceId(), "name", name)
+	slog.Info("starting instance", "template", config.Template, "instance", inst, "name", name)
 
 	game.instances = append(game.instances, inst)
 
-	wireguardConfigUrl, err := game.Router.AddEndpoint(inst.InstanceId())
+	handler, err := game.Flow.AddInstance(inst)
+	if err != nil {
+		return nil, err
+	}
+
+	wg, err := game.Router.AddEndpoint(handler, VM_IP)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +377,7 @@ func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, c
 		return nil, err
 	}
 
-	if err := inst.Start(config.Template, wireguardConfigUrl, secureSSHPath); err != nil {
+	if err := inst.Start(config.Template, wg, secureSSHPath); err != nil {
 		return nil, err
 	}
 
@@ -930,7 +811,7 @@ func (game *AttackDefenseGame) startSshServer() error {
 							return
 						}
 
-						other, err := game.DialContext(context.Background(), instance.InstanceId(), "tcp", VM_SSH_IP_PORT)
+						other, err := game.DialContext(context.Background(), nil, "tcp", ipPort(instance.Hostname(), VM_SSH_PORT))
 						if err != nil {
 							_ = newChannel.Reject(ssh.UnknownChannelType, fmt.Sprintf("failed to dial instance: %s", err))
 							return
@@ -974,6 +855,8 @@ func (game *AttackDefenseGame) Run() error {
 		}
 	}()
 
+	var err error
+
 	// Generate a key using age for the game.
 	// This key will be used to sign the flags.
 	if err := game.GenerateKeys(); err != nil {
@@ -984,11 +867,15 @@ func (game *AttackDefenseGame) Run() error {
 		game.RouterMTU = 1420
 	}
 
-	game.Router = &wireguardRouter{
-		serverUrl:     game.FrontendUrl(),
-		publicAddress: game.PublicIP,
-		mtu:           game.RouterMTU,
-		endpoints:     make(map[string]*wireguardInstance),
+	game.Router, err = NewWireguardRouter(game.PublicIP, game.RouterMTU, game.FrontendUrl())
+	if err != nil {
+		return fmt.Errorf("failed to create wireguard router: %w", err)
+	}
+
+	game.Flow = NewFlowRouter()
+
+	if _, err := game.Flow.AddInstance(game); err != nil {
+		return fmt.Errorf("failed to add host to flow router: %w", err)
 	}
 
 	// Start the built in web server.
@@ -1033,8 +920,6 @@ func (game *AttackDefenseGame) Run() error {
 		return int(a.Tick(game) - b.Tick(game))
 	})
 
-	var configKeys []string
-
 	// Load all existing device configurations.
 	if err := game.Persist.ForEach("devices", func(key string, read func(value interface{}) error) error {
 		var device DeviceConfig
@@ -1042,24 +927,22 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		if err := game.Router.RestoreDevice(key, device); err != nil {
-			return err
+		dev, err := game.addDevice(key, device.ID, "team")
+		if err != nil {
+			return fmt.Errorf("failed to add device: %w", err)
 		}
 
-		// Add the internal HTTP router.
-		internalWeb, err := game.Router.AddListener(device.ConfigKey, INTERNAL_WEB_IP_PORT)
+		handler, err := game.Flow.AddInstance(dev)
+		if err != nil {
+			return fmt.Errorf("failed to add device to flow router: %w", err)
+		}
+
+		wg, err := game.Router.RestoreDevice(key, device.Config, handler)
 		if err != nil {
 			return err
 		}
 
-		go func() {
-			http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Serve the request.
-				game.privateServer.ServeHTTP(w, r)
-			}))
-		}()
-
-		configKeys = append(configKeys, device.ConfigKey)
+		dev.wg = wg
 
 		return nil
 	}); err != nil {
@@ -1081,13 +964,6 @@ func (game *AttackDefenseGame) Run() error {
 		return t.Start(game)
 	}); err != nil {
 		return fmt.Errorf("failed to start all teams: %w", err)
-	}
-
-	// Register flows for all devices.
-	for _, configKey := range configKeys {
-		if err := game.registerFlowsForDevice(configKey); err != nil {
-			return err
-		}
 	}
 
 	if game.Config.Wait {
@@ -1156,50 +1032,77 @@ outer:
 	return nil
 }
 
-func (game *AttackDefenseGame) AddDevice(name string) error {
+func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Device, error) {
+	if id < 0 {
+		id = len(game.devices)
+	}
+
+	dev := &Device{
+		game: game,
+		name: name,
+		team: team,
+		id:   id,
+		ip:   net.IPv4(10, 40, 30, 1+byte(id)).String(),
+	}
+
+	if err := dev.ParseFlows(); err != nil {
+		return nil, fmt.Errorf("failed to parse flows for device (%s): %w", name, err)
+	}
+
+	game.devices = append(game.devices, dev)
+
+	return dev, nil
+}
+
+func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 	if _, err := game.Persist.ValidateKey(name); err != nil {
 		return err
 	}
 
-	deviceInstance := uuid.NewString()
-
-	deviceConfig, deviceId, err := game.Router.AddDevice(deviceInstance, name)
+	dev, err := game.addDevice(name, len(game.GetDevices()), team)
 	if err != nil {
 		return err
 	}
 
+	handler, err := game.Flow.AddInstance(dev)
+	if err != nil {
+		return err
+	}
+
+	wg, deviceConfig, err := game.Router.AddDevice(name, handler)
+	if err != nil {
+		return err
+	}
+
+	dev.wg = wg
+
 	if err := game.Persist.Set("devices", name, &DeviceConfig{
-		ConfigKey: deviceInstance,
-		ID:        deviceId,
-		Config:    deviceConfig,
+		ID:     dev.id,
+		Config: deviceConfig,
 	}); err != nil {
 		return err
 	}
 
-	slog.Info("added device", "name", name, "instance", deviceInstance)
-
-	if err := game.registerFlowsForDevice(deviceInstance); err != nil {
-		return err
-	}
-
-	// Add the internal HTTP router.
-	internalWeb, err := game.Router.AddListener(deviceInstance, INTERNAL_WEB_IP_PORT)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		http.Serve(internalWeb, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Serve the request.
-			game.privateServer.ServeHTTP(w, r)
-		}))
-	}()
+	slog.Info("added device", "name", name, "hostname", dev.Hostname())
 
 	return nil
 }
 
+func (game *AttackDefenseGame) DialContext(ctx context.Context, source FlowInstance, network, address string) (net.Conn, error) {
+	return game.Flow.DialContext(ctx, source, network, address)
+}
+
 func (game *AttackDefenseGame) GetDevices() []WireguardDevice {
-	return game.Router.GetDevices()
+	devices := make([]WireguardDevice, 0, len(game.devices))
+
+	for _, dev := range game.devices {
+		devices = append(devices, WireguardDevice{
+			Name: dev.name,
+			IP:   dev.ip,
+		})
+	}
+
+	return devices
 }
 
 var (

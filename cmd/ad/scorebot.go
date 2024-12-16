@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -75,7 +76,8 @@ func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, gam
 
 type ScoreBotConfig struct {
 	InstanceConfig `yaml:",inline"`
-	Services       []*ScoreBotServiceConfig `yaml:"services"`
+	Services       []*ServiceConfig         `yaml:"services"`
+	Checks         []*ScoreBotServiceConfig `yaml:"checks"`
 	HealthCheck    string                   `yaml:"health_check"`
 
 	instance TinyRangeInstance
@@ -95,6 +97,16 @@ func (v *ScoreBotConfig) Start(game *AttackDefenseGame) error {
 	inst, err := game.StartInstanceFromConfig("scorebot", SCOREBOT_IP, v.InstanceConfig)
 	if err != nil {
 		return err
+	}
+
+	if err := inst.ParseFlows(func(s string) (string, error) {
+		return "", fmt.Errorf("unexpected flow: %s", s)
+	}); err != nil {
+		return fmt.Errorf("failed to parse flows for scorebot: %w", err)
+	}
+
+	for _, service := range v.Services {
+		inst.AddService(service)
 	}
 
 	v.instance = inst
@@ -127,14 +139,14 @@ func (v *ScoreBotConfig) ForEachService(cb func(*ScoreBotServiceConfig) error) e
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(v.Services))
 
-	for _, service := range v.Services {
+	for _, check := range v.Checks {
 		wg.Add(1)
 		go func(service *ScoreBotServiceConfig) {
 			defer wg.Done()
 			if err := cb(service); err != nil {
 				errChan <- err
 			}
-		}(service)
+		}(check)
 	}
 
 	wg.Wait()

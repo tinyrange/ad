@@ -14,12 +14,23 @@ type ServiceConfig struct {
 	ServiceName string  `yaml:"name"`
 	ServicePort int     `yaml:"port"`
 	ServiceTags TagList `yaml:"tags"`
+	Private     bool    `yaml:"private"`
+}
+
+// DialContext implements FlowService.
+func (s *ServiceConfig) DialContext(ctx context.Context, target FlowInstance) (net.Conn, error) {
+	if tr, ok := target.(TinyRangeInstance); ok {
+		return tr.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", target.InstanceAddress().String(), s.ServicePort))
+	} else {
+		slog.Error("invalid target instance", "target", target, "targetType", fmt.Sprintf("%T", target))
+		return nil, fmt.Errorf("invalid target instance: %T", target)
+	}
 }
 
 // AcceptConn implements FlowService.
 func (s *ServiceConfig) AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
 	if tr, ok := target.(TinyRangeInstance); ok {
-		tr.AcceptConn(service, conn)
+		tr.AcceptConn(source, service, conn)
 	} else {
 		slog.Error("invalid target instance", "target", target, "targetType", fmt.Sprintf("%T", target))
 	}
@@ -40,11 +51,25 @@ type InstanceConfig struct {
 	Flows    FlowList `yaml:"flows"`
 }
 
+type HealthCheckKind string
+
+const (
+	HealthCheckKindNone HealthCheckKind = ""
+	HealthCheckKindHTTP HealthCheckKind = "http"
+)
+
+type HealthCheckConfig struct {
+	Kind           HealthCheckKind `yaml:"kind"`
+	URL            string          `yaml:"url"`
+	ExpectedOutput string          `yaml:"expected"`
+}
+
 type VulnboxConfig struct {
 	InstanceConfig `yaml:",inline"`
-	InitTemplate   string          `yaml:"init"`
-	Services       []ServiceConfig `yaml:"services"`
-	Bot            BotConfig       `yaml:"bot"`
+	InitTemplate   string            `yaml:"init"`
+	HealthCheck    HealthCheckConfig `yaml:"health_check"`
+	Services       []ServiceConfig   `yaml:"services"`
+	Bot            BotConfig         `yaml:"bot"`
 }
 
 type EventDefinition struct {

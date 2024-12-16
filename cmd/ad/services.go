@@ -48,6 +48,14 @@ type hostService struct {
 	accept func(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn)
 }
 
+// DialContext implements FlowService.
+func (h *hostService) DialContext(ctx context.Context, target FlowInstance) (net.Conn, error) {
+	// create an in-memory pipe
+	client, server := net.Pipe()
+	go h.accept(nil, target, h, server)
+	return client, nil
+}
+
 // AcceptConn implements FlowService.
 func (h *hostService) AcceptConn(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
 	h.accept(source, target, service, conn)
@@ -138,6 +146,18 @@ func (game *AttackDefenseGame) registerInternalServices() error {
 
 			// Serve only a single connection.
 			s.Serve(&singleListener{conn: conn})
+		},
+	}
+	game.pingService = &hostService{
+		name: "ping",
+		port: 8080,
+		tags: TagList{"public"},
+		accept: func(source FlowInstance, target FlowInstance, service FlowService, conn net.Conn) {
+			defer conn.Close()
+
+			slog.Info("ping", "source", source.Hostname(), "target", target.Hostname(), "service", service.Name())
+
+			fmt.Fprintf(conn, "pong\n")
 		},
 	}
 

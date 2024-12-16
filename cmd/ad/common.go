@@ -14,7 +14,10 @@ const BOT_ID_OFFSET = 0xffff
 const (
 	HOST_IP     = "10.40.0.1"
 	SCOREBOT_IP = "10.40.0.10"
-	VM_IP       = "10.42.0.2"
+
+	VM_IP = "10.42.0.2"
+
+	VM_SSH_PORT = 2222
 )
 
 func ipPort(ip string, port int) string {
@@ -24,7 +27,6 @@ func ipPort(ip string, port int) string {
 var (
 	INTERNAL_WEB_IP_PORT    = ipPort(HOST_IP, 80)
 	FLAG_SUBMISSION_IP_PORT = ipPort(HOST_IP, 5000)
-	VM_SSH_IP_PORT          = ipPort(VM_IP, 2222)
 )
 
 type CONTEXT_KEY string
@@ -101,4 +103,19 @@ func (tags TagList) ContainsAny(other TagList) bool {
 		}
 	}
 	return false
+}
+
+func (tags TagList) Parse(rpl ReplaceFunc) (TagList, error) {
+	var parsed TagList
+
+	for _, tag := range tags {
+		parsedTag, err := ParseTag(tag, rpl)
+		if err != nil {
+			return nil, err
+		}
+
+		parsed = append(parsed, parsedTag)
+	}
+
+	return parsed, nil
 }

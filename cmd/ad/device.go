@@ -6,30 +6,29 @@ import (
 )
 
 type DeviceConfig struct {
-	ConfigKey string
-	Config    string
-	ID        int
+	Config string
+	ID     int
 }
 
 type WireguardDevice struct {
-	ConfigKey string
-	Config    string
-	ID        int
-	Name      string
-	IP        string
+	Config string
+	Name   string
+	IP     string
 }
 
 type Device struct {
 	game  *AttackDefenseGame
+	wg    WireguardInstance
 	name  string
 	team  string
+	id    int
 	ip    string
 	flows []ParsedFlow
 }
 
 // implements FlowInstance.
 func (d *Device) Flows() []ParsedFlow     { return d.flows }
-func (d *Device) Hostname() string        { return d.name }
+func (d *Device) Hostname() string        { return "device_" + d.name }
 func (d *Device) InstanceAddress() net.IP { return net.ParseIP(d.ip) }
 func (d *Device) Services() []FlowService { return []FlowService{} }
 func (d *Device) Tags() TagList           { return d.game.Config.Device.Tags }

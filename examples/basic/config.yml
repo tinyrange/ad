@@ -6,9 +6,14 @@ title: "Basic Example"
 vulnbox:
   # The template is a TinyRange configuration file that describes the vulnbox.
   template: vulnbox/vulnbox.yml
-  
+
   init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
-  
+
+  health_check:
+    kind: http
+    url: "http://{{ .TeamIP }}:5000/health"
+    expected: "OK"
+
   services:
     - id: 0
       name: "Hello"
@@ -28,6 +33,7 @@ vulnbox:
   # Flows is a list of outgoing flows the machine can connect to.
   # All machines implicitly have the public/*:public flow.
   flows:
+    - public/*:public
     - team/*:public
     - bot/{team}:public
     - device/{team}:public
@@ -35,7 +41,7 @@ vulnbox:
   bot:
     # Bots inherit the services of the vulnbox.
     enabled: true
-    
+
     template: vulnbox/bot.yml
 
     # Bots can have events that are triggered by the timeline.
@@ -48,10 +54,12 @@ vulnbox:
     # Bots are not tagged the same as regular teams so they can't be targeted except explicitly by their own team.
     tags:
       - bot/{team}
-    
-    # Bots can only connect to their own team.
+
+    # Bots can only connect to their own team and themselves.
     flows:
+      - public/*:public
       - team/{team}:public
+      - bot/{team}:public
 
 # Devices are externally joined machines.
 device:
@@ -59,27 +67,37 @@ device:
     - device/{team}
 
   flows:
+    - public/*:public
     - team/*:public
     - team/{team}:private
     - bot/{team}:public
 
 scorebot:
   template: scorebot/scorebot.yml
-  
-  # Services is a list of services to check.
-  services:
+
+  # Checks is a list of services to check.
+  checks:
     - id: 0
       command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
       timeout: 1s
+
+  services:
+    - id: 1
+      name: "Private SSH"
+      port: 2222
+      private: true
+      tags:
+        - private
 
   tags:
     - scorebot/scorebot
 
   # Generally the scorebot only needs to connect to the teams and the bots.
   flows:
+    - public/*:public
     - team/*:public
     - bot/*:public # The scorebot has access to all bots.
-  
+
   # The health check is run after the scorebot is started.
   health_check: python3 /root/scoring.py health
 

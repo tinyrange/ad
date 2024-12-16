@@ -178,7 +178,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			instanceList = append(instanceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(instance.Hostname()),
-					bootstrap.LinkButton("/connect/"+instance.InstanceId(), bootstrap.ButtonColorPrimary, html.Text("Connect")),
+					bootstrap.LinkButton("/connect/"+instance.Hostname(), bootstrap.ButtonColorPrimary, html.Text("Connect")),
 				),
 			))
 		}
@@ -199,7 +199,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 		instanceId := r.PathValue("instance")
 
-		if _, err := game.getInstance(instanceId); err != nil {
+		if _, err := game.instanceFromName(instanceId); err != nil {
 			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
 			}
@@ -229,9 +229,9 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			return
 		}
 
-		instanceId := r.PathValue("instance")
+		instanceName := r.PathValue("instance")
 
-		instance, err := game.getInstance(instanceId)
+		instance, err := game.instanceFromName(instanceName)
 		if err != nil {
 			slog.Error("failed to get instance", "err", err)
 			http.Error(w, "instance not found", http.StatusNotFound)
@@ -350,7 +350,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			return
 		}
 
-		if err := game.AddDevice(name); err != nil {
+		if err := game.AddDevice(name, "team"); err != nil {
 			slog.Error("failed to add device", "err", err)
 			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)

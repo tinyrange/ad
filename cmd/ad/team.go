@@ -12,11 +12,10 @@ import (
 )
 
 type TargetInfo struct {
-	ID         int
-	Name       string
-	IP         string
-	InstanceId string
-	IsBot      bool
+	ID    int
+	Name  string
+	IP    string
+	IsBot bool
 }
 
 type Team struct {
@@ -37,20 +36,6 @@ func (t *Team) GetSSHConfig() (SecureSSHConfig, error) {
 	return t.teamInstance.SecureConfig()
 }
 
-func (t *Team) InstanceId() string {
-	if t.teamInstance == nil {
-		return ""
-	}
-	return t.teamInstance.InstanceId()
-}
-
-func (t *Team) BotInstanceId() string {
-	if t.botInstance == nil {
-		return ""
-	}
-	return t.botInstance.InstanceId()
-}
-
 func (t *Team) IP() string {
 	return net.IPv4(10, 40, 10, 10+byte(t.ID)).String()
 }
@@ -61,21 +46,19 @@ func (t *Team) BotIP() string {
 
 func (t *Team) Info() TargetInfo {
 	return TargetInfo{
-		ID:         t.ID,
-		Name:       t.DisplayName,
-		IP:         t.IP(),
-		InstanceId: t.InstanceId(),
-		IsBot:      false,
+		ID:    t.ID,
+		Name:  t.DisplayName,
+		IP:    t.IP(),
+		IsBot: false,
 	}
 }
 
 func (t *Team) BotInfo() TargetInfo {
 	return TargetInfo{
-		ID:         t.BotId(),
-		Name:       t.DisplayName + "_bot",
-		IP:         t.BotIP(),
-		InstanceId: t.BotInstanceId(),
-		IsBot:      true,
+		ID:    t.BotId(),
+		Name:  t.DisplayName + "_bot",
+		IP:    t.BotIP(),
+		IsBot: true,
 	}
 }
 
@@ -186,8 +169,33 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		inst.AddService(&service)
 	}
 
-	if err := game.registerFlowsForTeam(t, t.Info()); err != nil {
-		return fmt.Errorf("failed to register flows for team (%d): %w", t.ID, err)
+	// Run the init command.
+	if err := t.runInitCommand(game, t.Info()); err != nil {
+		return fmt.Errorf("failed to run init command for team: %w", err)
+	}
+
+	// Run a health check.
+	if game.Config.Vulnbox.HealthCheck.Kind != HealthCheckKindNone {
+		if err := inst.HealthCheck(game.Config.Vulnbox.HealthCheck, func(tpl string) (string, error) {
+			t, err := template.New("health_check").Parse(tpl)
+			if err != nil {
+				return "", err
+			}
+
+			var buf strings.Builder
+
+			if err := t.Execute(&buf, &struct {
+				TeamIP string
+			}{
+				TeamIP: inst.InstanceAddress().String(),
+			}); err != nil {
+				return "", err
+			}
+
+			return buf.String(), nil
+		}); err != nil {
+			return fmt.Errorf("failed to run health check for team: %w", err)
+		}
 	}
 
 	// If there is a bot, start the bot instance.
@@ -208,28 +216,13 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 			return fmt.Errorf("failed to parse flows for team (%d): %w", t.ID, err)
 		}
 
-		if err := game.registerFlowsForTeam(t, t.BotInfo()); err != nil {
-			return fmt.Errorf("failed to register flows for team bot (%d): %w", t.ID, err)
+		for _, service := range game.Config.Vulnbox.Services {
+			inst.AddService(&service)
 		}
 
-		// Open the bot to the team.
-		for _, service := range game.Config.Vulnbox.Services {
-			if err := game.Router.AddSimpleForwarder(
-				t.InstanceId(), ipPort(t.BotIP(), service.Port()),
-				t.BotInstanceId(), ipPort(VM_IP, service.Port()),
-			); err != nil {
-				return err
-			}
-		}
-
-		// Open the team to the bot.
-		for _, service := range game.Config.Vulnbox.Services {
-			if err := game.Router.AddSimpleForwarder(
-				t.BotInstanceId(), ipPort(t.IP(), service.Port()),
-				t.InstanceId(), ipPort(VM_IP, service.Port()),
-			); err != nil {
-				return err
-			}
+		// Run the init command.
+		if err := t.runInitCommand(game, t.BotInfo()); err != nil {
+			return fmt.Errorf("failed to run init command for bot: %w", err)
 		}
 	}
 
