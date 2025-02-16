@@ -79,6 +79,9 @@ type AttackDefenseGame struct {
 	// TinyRangePath is the path to the tinyrange binary.
 	TinyRangePath string
 
+	// TinyRangeVMMPath is the path to the tinyrange driver binary.
+	TinyRangeVMMPath string
+
 	// PublicIP is the public IP of the game.
 	PublicIP string
 

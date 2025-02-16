@@ -204,9 +204,9 @@ func (t *tinyRangeInstance) Start(templateName string, wg WireguardInstance, sec
 	}
 
 	args := []string{
-		t.game.TinyRangePath, "run-vm",
-		"--wireguard", wg.ConfigUrl(),
-		"--secure-ssh", secureSSHPath,
+		t.game.TinyRangeVMMPath,
+		"-wireguard-url", wg.ConfigUrl(),
+		"-secure-ssh", secureSSHPath,
 	}
 
 	if *verbose {

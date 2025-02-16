@@ -29,7 +29,8 @@ func (i *arrayFlags) Set(value string) error {
 var (
 	configFile       = flag.String("config", "", "The config file to start the Attack/Defense server with.")
 	nopTeam          arrayFlags
-	tinyrangePath    = flag.String("tinyrange", "tinyrange", "The path to the tinyrange binary.")
+	tinyrangePath    = flag.String("tinyrange", "", "The path to the tinyrange binary.")
+	tinyrangeVMMPath = flag.String("tinyrange-vmm", "", "The path to the tinyrange driver binary.")
 	verbose          = flag.Bool("verbose", false, "Enable verbose logging.")
 	sshServer        = flag.String("ssh-server", "", "The SSH server to listen on.")
 	sshServerHostKey = flag.String("ssh-server-host-key", "", "The SSH server host key.")
@@ -119,6 +120,25 @@ func appMain() error {
 		}
 
 		game.TinyRangePath = tinyrange
+	}
+
+	if *tinyrangeVMMPath != "" {
+		game.TinyRangeVMMPath = *tinyrangeVMMPath
+	} else {
+		if *tinyrangePath != "" {
+			// look in the same directory as the tinyrange binary
+			tinyrangeVMM := filepath.Join(filepath.Dir(*tinyrangePath), "tinyrange_qemu")
+			if _, err := os.Stat(tinyrangeVMM); err == nil {
+				game.TinyRangeVMMPath = tinyrangeVMM
+			}
+		} else {
+			tinyrangeVMM, err := exec.LookPath("tinyrange_qemu")
+			if err != nil {
+				return fmt.Errorf("tinyrange_qemu not found in PATH")
+			}
+
+			game.TinyRangeVMMPath = tinyrangeVMM
+		}
 	}
 
 	if *wait {
