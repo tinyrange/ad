@@ -6,7 +6,7 @@ require (
 	github.com/gomarkdown/markdown v0.0.0-20250207164621-7a1f277a159e
 	github.com/gorilla/websocket v1.5.3
 	github.com/tinyrange/wireguard v0.1.0
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/net v0.35.0
 	gopkg.in/yaml.v3 v3.0.1
 )
