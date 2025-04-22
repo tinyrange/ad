@@ -745,8 +745,11 @@ func (game *AttackDefenseGame) instanceFromName(name string) (TinyRangeInstance,
 	}
 
 	for _, team := range game.Teams {
-		if name == fmt.Sprintf("team_%d", team.ID) {
+		if name == team.teamInstance.Hostname() {
 			return team.teamInstance, nil
+		}
+		if name == team.botInstance.Hostname() {
+			return team.botInstance, nil
 		}
 	}
 
