@@ -1103,8 +1103,9 @@ func (game *AttackDefenseGame) GetDevices() []WireguardDevice {
 
 	for _, dev := range game.devices {
 		devices = append(devices, WireguardDevice{
-			Name: dev.name,
-			IP:   dev.ip,
+			ConfigUrl: dev.wg.ConfigUrl(),
+			Name:      dev.name,
+			IP:        dev.ip,
 		})
 	}
 

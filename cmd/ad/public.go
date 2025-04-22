@@ -310,12 +310,13 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		var deviceList []htm.Fragment
 
 		for _, device := range devices {
+			slog.Info(device.ConfigUrl)
 			deviceList = append(deviceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(device.Name),
-					html.Div(html.Strong(html.Text("IP Adddress:")), html.Textf("%s", device.IP)),
+					html.Div(html.Strong(html.Text("IP Address:")), html.Textf("%s", device.IP)),
 					html.Div(
-						html.Pre(html.Code(html.Textf("%s", device.Config))),
+						html.Link(device.ConfigUrl, html.Textf("Wireguard client config")),
 					),
 				),
 			))

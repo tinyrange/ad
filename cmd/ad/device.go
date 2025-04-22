@@ -11,9 +11,9 @@ type DeviceConfig struct {
 }
 
 type WireguardDevice struct {
-	Config string
-	Name   string
-	IP     string
+	ConfigUrl string
+	Name      string
+	IP        string
 }
 
 type Device struct {

@@ -227,14 +227,15 @@ func (r *wireguardRouter) AddDevice(name string, handler NetHandler) (inst Wireg
 		return nil, "", err
 	}
 
-	r.configs[r.configKeyFromHostname(handler.Hostname())] = deviceConfig
+	configKey := r.configKeyFromHostname(handler.Hostname())
+	r.configs[configKey] = deviceConfig
 
 	config, err = wg.GetConfig()
 	if err != nil {
 		return nil, "", err
 	}
 
-	inst = &wireguardInstance{wg: wg}
+	inst = &wireguardInstance{wg: wg, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}
 
 	return
 }
