@@ -46,16 +46,27 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		return nil
 	}
 
+	// Generate table cell contents
 	var headerRow htm.Group
-	headerRow = append(headerRow, html.Text("#"))
-	headerRow = append(headerRow, html.Text("Name"))
-	headerRow = append(headerRow, html.Text("Points"))
+	var subheaderRow htm.Group
+	headerSpans := []int{}
+	headerRow = append(headerRow, html.Text(""))
+	subheaderRow = append(subheaderRow,
+		html.Text("#"),
+		html.Text("Name"),
+		html.Text("Points"),
+	)
+	headerSpans = append(headerSpans, 3)
 	for _, service := range game.Config.Vulnbox.PublicServices() {
-		headerRow = append(headerRow, html.Textf("%s Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Defense Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Uptime Points", service.Name()))
+		headerRow = append(headerRow, html.Textf("%s", service.Name()))
+		subheaderRow = append(subheaderRow,
+			html.Text("Points"),
+			html.Text("Uptime"),
+			html.Text("Attack"),
+			html.Text("Defense"),
+			html.Text("Current SLA"),
+		)
+		headerSpans = append(headerSpans, 5)
 	}
 
 	var rows []htm.Group
@@ -63,7 +74,7 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		row := htm.Group{
 			html.Textf("%d", team.Position),
 			html.Textf("%s", team.Name),
-			html.Textf("%f", team.Points),
+			html.Textf("%.2f", team.Points),
 		}
 
 		for _, service := range game.Config.Vulnbox.PublicServices() {
@@ -72,11 +83,11 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 				row = append(row, html.Text(""), html.Text(""), html.Text(""), html.Text(""), html.Text(""))
 			} else {
 				row = append(row,
-					html.Textf("%f", serviceState.Points),
-					html.Textf("%f", serviceState.TickPoints),
-					html.Textf("%f", serviceState.AttackPoints),
-					html.Textf("%f", serviceState.DefensePoints),
-					html.Textf("%f", serviceState.UptimePoints),
+					html.Textf("%.2f", serviceState.Points),
+					html.Textf("%.2f", serviceState.TickPoints),
+					html.Textf("%.2f", serviceState.AttackPoints),
+					html.Textf("%.2f", serviceState.DefensePoints),
+					html.Textf("%d%%", int(serviceState.UptimePoints*100)),
 				)
 			}
 		}
@@ -84,9 +95,65 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		rows = append(rows, row)
 	}
 
-	return bootstrap.Table(
-		headerRow,
-		rows,
+	// Render the table
+	var headerItems []htm.Fragment
+	for i, item := range headerRow {
+		headerItems = append(headerItems, htm.NewHtmlFragment("th",
+			htm.Attr("colspan", strconv.Itoa(headerSpans[i])),
+			htm.Attr("style", "text-align: center"),
+			item,
+		))
+	}
+
+	var colGroups []htm.Fragment
+	for i, span := range headerSpans {
+		// Add borders between column groups (services)
+		style := ""
+		if i != len(headerSpans)-1 {
+			style = "border-right: 1px solid var(--bs-table-border-color)"
+		}
+
+		colGroups = append(colGroups, htm.NewHtmlFragment("colgroup",
+			htm.Attr("span", strconv.Itoa(span)),
+			htm.Attr("style", style),
+		))
+	}
+
+	var subheaderItems []htm.Fragment
+	for _, item := range subheaderRow {
+		subheaderItems = append(subheaderItems, htm.NewHtmlFragment("th", item))
+	}
+
+	var rowItems []htm.Fragment
+	for _, item := range rows {
+		var row htm.Group
+		for _, cell := range item {
+			row = append(row, htm.NewHtmlFragment("td", cell))
+		}
+		rowItems = append(rowItems, htm.NewHtmlFragment("tr", row))
+	}
+
+	var fragments []htm.Fragment
+	fragments = append(fragments,
+		htm.Class("table"),
+		htm.Class("table-striped"),
+	)
+	for _, colGroup := range colGroups {
+		fragments = append(fragments, colGroup)
+	}
+	fragments = append(fragments,
+		htm.NewHtmlFragment("thead",
+			htm.NewHtmlFragment("tr", headerItems...),
+			htm.NewHtmlFragment("tr", subheaderItems...),
+		),
+		htm.NewHtmlFragment("tbody", rowItems...),
+	)
+
+	return html.Div(
+		htm.Class("table-responsive"),
+		htm.NewHtmlFragment("table",
+			fragments...,
+		),
 	)
 }
 
