@@ -1051,6 +1051,10 @@ func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Dev
 		ip:   net.IPv4(10, 40, 30, 1+byte(id)).String(),
 	}
 
+	if err := dev.ParseTags(); err != nil {
+		return nil, fmt.Errorf("failed to parse tags for device (%s): %w", name, err)
+	}
+
 	if err := dev.ParseFlows(); err != nil {
 		return nil, fmt.Errorf("failed to parse flows for device (%s): %w", name, err)
 	}

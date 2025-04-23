@@ -178,6 +178,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			instanceList = append(instanceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(instance.Hostname()),
+					bootstrap.CardTitle(instance.InstanceAddress().String()),
 					bootstrap.LinkButton("/connect/"+instance.Hostname(), bootstrap.ButtonColorPrimary, html.Text("Connect")),
 				),
 			))
@@ -310,7 +311,6 @@ func (game *AttackDefenseGame) startPublicServer() error {
 		var deviceList []htm.Fragment
 
 		for _, device := range devices {
-			slog.Info(device.ConfigUrl)
 			deviceList = append(deviceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(device.Name),
