@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/tinyrange/ad/pkg/common"
 	"golang.org/x/crypto/ssh"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 )
 
 type SecureSSHConfig struct {
@@ -244,6 +245,10 @@ func (t *tinyRangeInstance) RunCommand(ctx context.Context, command string) (str
 		return "", fmt.Errorf("failed to dial instance: %w", err)
 	}
 	defer conn.Close()
+
+	// Apply the current timeout to the connection as a whole (ctx only applies it to the connection establishment phase)
+	deadline, _ := ctx.Deadline()
+	conn.(*gonet.TCPConn).SetDeadline(deadline)
 
 	config, err := t.clientConfig()
 	if err != nil {
