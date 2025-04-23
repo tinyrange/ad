@@ -122,6 +122,7 @@ func (r *wireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) 
 
 	// Set the content type to plain text
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"client.conf\"")
 
 	if _, err := w.Write([]byte(config)); err != nil {
 		slog.Error("failed to write config", "err", err)
