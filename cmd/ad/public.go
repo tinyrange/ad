@@ -389,11 +389,17 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			))
 		}
 
+		teamNames := []string{}
+		for _, team := range game.Teams {
+			teamNames = append(teamNames, team.DisplayName)
+		}
+
 		page := game.publicPageLayout("Devices",
 			htm.Group(deviceList),
 			html.Form(
 				html.FormTarget("POST", "/api/device"),
 				bootstrap.FormField("Name", "name", html.FormOptions{Kind: html.FormFieldText, Required: true, Value: "", Placeholder: "Device Name"}),
+				bootstrap.FormField("Team", "team", html.FormOptions{Kind: html.FormFieldSelect, Required: true, Value: "", Placeholder: "Team", Options: teamNames}),
 				bootstrap.SubmitButton("Add Device", bootstrap.ButtonColorPrimary),
 			),
 		)
@@ -418,7 +424,16 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			return
 		}
 
-		if err := game.AddDevice(name, "team"); err != nil {
+		team := r.FormValue("team")
+
+		if team == "" {
+			if err := htm.Render(r.Context(), w, game.publicPageError(fmt.Errorf("team is required"))); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+			return
+		}
+
+		if err := game.AddDevice(name, team); err != nil {
 			slog.Error("failed to add device", "err", err)
 			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
