@@ -72,6 +72,16 @@ type VulnboxConfig struct {
 	Bot            BotConfig         `yaml:"bot"`
 }
 
+func (v *VulnboxConfig) PublicServices() []ServiceConfig {
+	publicServices := []ServiceConfig{}
+	for _, service := range v.Services {
+		if !service.Private {
+			publicServices = append(publicServices, service)
+		}
+	}
+	return publicServices
+}
+
 type EventDefinition struct {
 	Command    string   `yaml:"command"`
 	Timeout    Duration `yaml:"timeout"`

@@ -50,7 +50,7 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 	headerRow = append(headerRow, html.Text("#"))
 	headerRow = append(headerRow, html.Text("Name"))
 	headerRow = append(headerRow, html.Text("Points"))
-	for _, service := range game.Config.Vulnbox.Services {
+	for _, service := range game.Config.Vulnbox.PublicServices() {
 		headerRow = append(headerRow, html.Textf("%s Points", service.Name()))
 		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name()))
 		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name()))
@@ -66,7 +66,7 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 			html.Textf("%f", team.Points),
 		}
 
-		for _, service := range game.Config.Vulnbox.Services {
+		for _, service := range game.Config.Vulnbox.PublicServices() {
 			serviceState := team.Services[service.Id]
 			if serviceState == nil {
 				row = append(row, html.Text(""), html.Text(""), html.Text(""), html.Text(""), html.Text(""))

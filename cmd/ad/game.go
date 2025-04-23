@@ -503,10 +503,12 @@ func (game *AttackDefenseGame) setServiceOverallScore(service *ServiceState) {
 func (game *AttackDefenseGame) setTeamOverallScore(team *TeamState) {
 	score := 0.0
 
-	for _, service := range team.Services {
+	for i, service := range team.Services {
 		game.setServiceOverallScore(service)
 
-		score += service.Points
+		if !game.Config.Vulnbox.Services[i].Private {
+			score += service.Points
+		}
 	}
 
 	team.Points = score
