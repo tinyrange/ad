@@ -1,7 +1,8 @@
 version: 1
 builder: alpine@3.20
 files:
-    - app.py
+    - pastebin/app.py:/root/pastebin/app.py
+    - post_office/app.py:/root/post_office/app.py
     - init.py
 packages:
     - python3

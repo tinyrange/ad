@@ -16,16 +16,21 @@ vulnbox:
 
   services:
     - id: 0
-      name: "Hello"
-      port: 5000
-      tags:
-        - public
-    - id: 1
       name: "Private SSH"
       port: 2222
       private: true
       tags:
         - private
+    - id: 1
+      name: "Pastebin"
+      port: 5000
+      tags:
+        - public
+    - id: 2
+      name: "Post office"
+      port: 5001
+      tags:
+        - public
 
   tags:
     - team/{team}
@@ -40,14 +45,18 @@ vulnbox:
 
   bot:
     # Bots inherit the services of the vulnbox.
-    enabled: true
+    enabled: false
 
     template: vulnbox/bot.yml
 
     # Bots can have events that are triggered by the timeline.
     events:
-      vuln1:
-        command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+      pastebin_vuln1:
+        command: python3 /root/pastebin/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+        timeout: 2s
+        background: true
+      post_office_vuln1:
+        command: python3 /root/post_office/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
         timeout: 2s
         background: true
 
@@ -80,6 +89,9 @@ scorebot:
     - id: 0
       command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
       timeout: 1s
+    - id: 2
+      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+      timeout: 1s
 
   services:
     - id: 1
@@ -107,17 +119,17 @@ scoring:
   points_per_lost_flag: -100
 
 # Flags are valid for 1 second.
-flag_valid_time: 1s
+flag_valid_time: 120s
 
 # The game will run for 5 seconds with 40 ticks.
-tick_rate: 0.25s
-duration: 5s
+tick_rate: 30s
+duration: 600s
 
 timeline:
   # - at: 5s
   #   event: network/open/bots
-  - at: 1s
-    event: bot/vuln1
+  # - at: 1s
+  #   event: bot/vuln1
   # - at: 15s
   #   event: network/open
   # - at: 25s

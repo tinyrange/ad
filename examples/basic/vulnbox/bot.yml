@@ -1,9 +1,11 @@
 version: 1
 builder: alpine@3.20
 files:
-    - app.py
+    - pastebin/app.py
+    - pastebin/exploit1.py
+    - post_office/app.py
+    - post_office/exploit1.py
     - init.py
-    - exploit1.py
 packages:
     - python3
     - py3-flask
