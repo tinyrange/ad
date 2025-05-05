@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 
 	"github.com/gomarkdown/markdown"
@@ -61,16 +63,20 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		headerRow = append(headerRow, html.Textf("%s", service.Name()))
 		subheaderRow = append(subheaderRow,
 			html.Text("Points"),
-			html.Text("Uptime"),
+			html.Text("Tick"),
 			html.Text("Attack"),
 			html.Text("Defense"),
-			html.Text("Current SLA"),
+			html.Text("Uptime"),
 		)
 		headerSpans = append(headerSpans, 5)
 	}
 
 	var rows []htm.Group
-	for _, team := range scoreboard.Teams {
+	sortedTeams := slices.Collect(maps.Values(scoreboard.Teams))
+	slices.SortFunc(sortedTeams, func(a, b *TeamState) int {
+		return a.Position - b.Position
+	})
+	for _, team := range sortedTeams {
 		row := htm.Group{
 			html.Textf("%d", team.Position),
 			html.Textf("%s", team.Name),
