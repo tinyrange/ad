@@ -128,7 +128,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 					html.Id("flag-form"),
 					htmx.Post("/api/flag"),
 					htmx.Target("flag-result"),
-					bootstrap.FormField("flag", "Flag", html.FormOptions{
+					bootstrap.FormField("Flag", "flag", html.FormOptions{
 						Kind:     html.FormFieldText,
 						Required: true,
 						Value:    "",
