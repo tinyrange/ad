@@ -72,6 +72,15 @@ type VulnboxConfig struct {
 	Bot            BotConfig         `yaml:"bot"`
 }
 
+func (v *VulnboxConfig) GetService(id int) *ServiceConfig {
+	for _, service := range v.Services {
+		if service.Id == id {
+			return &service
+		}
+	}
+	return nil
+}
+
 func (v *VulnboxConfig) PublicServices() []ServiceConfig {
 	publicServices := []ServiceConfig{}
 	for _, service := range v.Services {

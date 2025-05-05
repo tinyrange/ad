@@ -8,6 +8,7 @@ import (
 type DeviceConfig struct {
 	Config string
 	ID     int
+	Team   string
 }
 
 type WireguardDevice struct {

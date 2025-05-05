@@ -86,11 +86,11 @@ scorebot:
 
   # Checks is a list of services to check.
   checks:
-    - id: 0
-      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+    - id: 1
+      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
       timeout: 1s
     - id: 2
-      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
       timeout: 1s
 
   services:

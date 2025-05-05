@@ -689,7 +689,8 @@ func (game *AttackDefenseGame) Tick() error {
 
 			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag)
 			if err != nil {
-				return err
+				slog.Error("failed to run scorebot", "err", err)
+				success = false
 			}
 
 			slog.Info("scorebot response",
@@ -935,7 +936,7 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		dev, err := game.addDevice(key, device.ID, "team")
+		dev, err := game.addDevice(key, device.ID, device.Team)
 		if err != nil {
 			return fmt.Errorf("failed to add device: %w", err)
 		}
@@ -1091,6 +1092,7 @@ func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 	if err := game.Persist.Set("devices", name, &DeviceConfig{
 		ID:     dev.id,
 		Config: deviceConfig,
+		Team:   team,
 	}); err != nil {
 		return err
 	}
