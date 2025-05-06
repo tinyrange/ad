@@ -87,10 +87,10 @@ scorebot:
   # Checks is a list of services to check.
   checks:
     - id: 1
-      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
+      command: python3 /root/pastebin/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
       timeout: 1s
     - id: 2
-      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
+      command: python3 /root/post_office/scoring.py {{ .TeamIP }} {{ .NewFlag }} {{ .ServicePort }}
       timeout: 1s
 
   services:
@@ -111,7 +111,7 @@ scorebot:
     - bot/*:public # The scorebot has access to all bots.
 
   # The health check is run after the scorebot is started.
-  health_check: python3 /root/scoring.py health
+  health_check: python3 /root/pastebin/scoring.py health
 
 scoring:
   points_per_tick: 100
@@ -119,10 +119,10 @@ scoring:
   points_per_lost_flag: -100
 
 # Flags are valid for 1 second.
-flag_valid_time: 120s
+flag_valid_time: 30s
 
 # The game will run for 5 seconds with 40 ticks.
-tick_rate: 30s
+tick_rate: 5s
 duration: 600s
 
 timeline:

@@ -1,20 +1,21 @@
-from flask import Flask, request, jsonify, render_template_string
-import json
+from flask import Flask, request, jsonify, render_template_string, redirect
+import sqlite3
 import os
 
-app = Flask(__name__)
-DATA_FILE = "data.json"
 
-# Load existing data or initialize an empty dictionary
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-else:
-    data = {}
+DB_PATH = "./app.db"
+app = Flask(__name__)
+
+
+def get_db():
+    return sqlite3.connect(DB_PATH)
 
 
 @app.route("/")
 def index():
+    db = get_db()
+    data = db.execute("SELECT id, content FROM pastes").fetchall()
+    data = {row[0]: row[1] for row in data}
     return render_template_string(
         """
         <h1>Pastebin</h1>
@@ -31,26 +32,40 @@ def index():
                 </li>
             {% endfor %}
         </ul>
-    """,
+        """,
         entries=data,
     )
+
+
+def insert_paste(content: str):
+    with get_db() as db:
+        cursor = db.cursor()
+        cursor.execute("INSERT INTO pastes (content) VALUES (?)", [content])
+        paste_id = cursor.lastrowid
+        return paste_id
 
 
 @app.route("/paste", methods=["POST"])
 def paste():
     content = request.form["content"]
-    paste_id = str(len(data) + 1)
-    data[paste_id] = content
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+    insert_paste(content)
+    return redirect("/")
+
+
+@app.route("/api/paste", methods=["POST"])
+def paste_api():
+    content = request.form["content"]
+    paste_id = insert_paste(content)
     return jsonify({"id": paste_id, "content": content})
 
 
-@app.route("/paste/<paste_id>", methods=["GET"])
+@app.route("/api/paste/<paste_id>", methods=["GET"])
 def get_paste(paste_id):
-    content = data.get(paste_id)
-    if content:
-        return jsonify({"id": paste_id, "content": content})
+    with get_db() as db:
+        row = db.execute("SELECT content FROM pastes WHERE id=?", [paste_id]).fetchone()
+
+    if row is not None:
+        return jsonify({"id": paste_id, "content": row[0]})
     else:
         return jsonify({"error": "Paste not found"}), 404
 
@@ -61,4 +76,15 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    with get_db() as db:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pastes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT
+            )
+            """
+        )
+    db.close()
+
+    app.run(debug=True, host="0.0.0.0", port=os.getenv("PORT", 5000))

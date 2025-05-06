@@ -1,1 +1,4 @@
 local/
+.DS_Store
+venv/
+app.db
