@@ -42,7 +42,7 @@ type scoreBotResponse struct {
 	Message string `json:"message"`
 }
 
-func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, game *AttackDefenseGame, info TargetInfo, flag string) (bool, string, error) {
+func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, game *AttackDefenseGame, info TargetInfo, flag string, flagId string) (bool, string, error) {
 	tpl, err := v.getTemplate()
 	if err != nil {
 		return false, "", err
@@ -52,11 +52,13 @@ func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, gam
 
 	service := game.Config.Vulnbox.GetService(v.Id)
 	if err := tpl.Execute(&buf, &struct {
-		TeamIP      string
+		TargetIP    string
+		FlagId      string
 		NewFlag     string
 		ServicePort string
 	}{
-		TeamIP:      info.IP,
+		TargetIP:    info.IP,
+		FlagId:      flagId,
 		NewFlag:     flag,
 		ServicePort: strconv.Itoa(service.Port()),
 	}); err != nil {

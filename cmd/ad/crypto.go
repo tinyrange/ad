@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"strconv"
@@ -102,6 +103,12 @@ func (gen *FlagGenerator) Verify(public string, flag string) (tickId int, teamId
 	ok = Verify(public, []byte(data), sig)
 
 	return
+}
+
+func FlagId(tickId int, serviceId int) string {
+	context := fmt.Sprintf("%d.%d", tickId, serviceId)
+	sum := sha256.Sum256([]byte(context))
+	return fmt.Sprintf("%x", sum)[:12]
 }
 
 func NewFlagGenerator(prefix, suffix string) *FlagGenerator {

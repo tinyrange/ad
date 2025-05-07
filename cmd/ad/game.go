@@ -690,9 +690,11 @@ func (game *AttackDefenseGame) Tick() error {
 			subCtx, cancel := context.WithTimeout(ctx, game.scaleDuration(service.Timeout.Duration))
 			defer cancel()
 
-			newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, service.Id, game.Signer)
+			tickId := int(game.CurrentTick)
+			flagId := FlagId(tickId, service.Id)
+			newFlag := game.FlagGen.Generate(tickId, info.ID, service.Id, game.Signer)
 
-			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag)
+			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag, flagId)
 			if err != nil {
 				slog.Error("failed to run scorebot", "err", err)
 				success = false
