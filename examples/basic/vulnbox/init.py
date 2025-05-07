@@ -17,14 +17,18 @@ def main(args):
     )
     subprocess.check_call(["touch", "/run/openrc/softlevel"])
 
-    services = [("pastebin", 5000), ("post_office", 5001)]
+    services = [
+        ("pastebin", 5000, "/usr/bin/python3", "/root/pastebin/app.py", True),
+        ("post_office", 5001, "/usr/bin/python3", "/root/post_office/app.py", True),
+        ("pcap-broker", 4242, "/root/pcap-broker/pcap-broker", "-cmd \\\"tcpdump -i eth0 -n --immediate-mode -s 65535 -U -w - '! (dst 10.42.0.2 and (dst port 2222 or dst port 4242)) and ! (src 10.42.0.2 and (src port 2222 or src port 4242))'\\\" -listen 0.0.0.0:4242", False),
+    ]
 
-    for service, port in services:
+    for service, port, cmd, args, check in services:
         with open(f"/etc/init.d/{service}", "w") as f:
             f.write(
                 f"""#!/sbin/openrc-run
-command="/usr/bin/python3"
-command_args="/root/{service}/app.py"
+command="{cmd}"
+command_args="{args}"
 command_background="yes"
 pidfile="/run/{service}.pid"
 respawn="yes"
@@ -54,15 +58,16 @@ directory="/root/{service}"
             print(f"error: {service}:", response.stderr)
             return
 
-        # Request the homepage of the service
-        response = subprocess.run(
-            ["curl", f"http://{teamIp}:{port}/"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if response.returncode != 0:
-            print(f"error: {service}:", response.stderr)
-            return
+        if check:
+            # Request the homepage of the service
+            response = subprocess.run(
+                ["curl", f"http://{teamIp}:{port}/"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if response.returncode != 0:
+                print(f"error: {service}:", response.stderr)
+                return
     print("success")
 
 

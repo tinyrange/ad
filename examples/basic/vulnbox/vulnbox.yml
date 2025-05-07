@@ -4,8 +4,22 @@ files:
     - pastebin/app.py:/root/pastebin/app.py
     - post_office/app.py:/root/post_office/app.py
     - init.py
+layers:
+    - git clone https://github.com/fox-it/pcap-broker /root/pcap-broker
+    - cd /root/pcap-broker && go build .
 packages:
-    - python3
-    - py3-flask
+    # Init dependencies
     - openrc
     - curl
+
+    # Challenge dependencies
+    - python3
+    - py3-flask
+
+    # PCAP Broker dependencies
+    - go
+    - libpcap-dev
+    - git
+    - gcc
+    - musl-dev
+    - tcpdump
