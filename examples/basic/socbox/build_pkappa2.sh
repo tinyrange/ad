@@ -9,4 +9,4 @@ rm -rf build
 mkdir build
 cp -R converters build
 cp -R web/dist build
-cp main build
+mv main build
