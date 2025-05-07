@@ -232,6 +232,13 @@ func (game *AttackDefenseGame) teamFromTag(tag string) (team *Team, bot bool, er
 	return nil, false, fmt.Errorf("team not found: %s", tag)
 }
 
+func (game *AttackDefenseGame) flagsStolenBy(info TargetInfo, serviceId int) []FlagInfo {
+	return append(
+		game.OverallState.Teams[info.ID].Services[serviceId].StolenFlags,
+		game.CurrentState.Teams[info.ID].Services[serviceId].StolenFlags...,
+	)
+}
+
 func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
 	if !game.Running.Load() {
 		return GameNotRunning
@@ -264,10 +271,8 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 		return FlagNotYetValid
 	}
 
-	ownService := game.CurrentState.Teams[info.ID].Services[serviceId]
-
 	// Check if the flag has already been stolen.
-	for _, stolen := range ownService.StolenFlags {
+	for _, stolen := range game.flagsStolenBy(info, serviceId) {
 		if stolen.TeamId == teamId && stolen.TickId == tickId {
 			return FlagAlreadyStolen
 		}
@@ -275,6 +280,7 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 
 	slog.Info("flag accepted", "team", info.Name, "target", teamId, "service", serviceId, "tick", tickId)
 
+	ownService := game.CurrentState.Teams[info.ID].Services[serviceId]
 	ownService.StolenFlags = append(ownService.StolenFlags, FlagInfo{TeamId: teamId, TickId: tickId})
 
 	otherService := game.CurrentState.Teams[teamId].Services[serviceId]
@@ -691,10 +697,9 @@ func (game *AttackDefenseGame) Tick() error {
 			defer cancel()
 
 			tickId := int(game.CurrentTick)
-			flagId := FlagId(tickId, service.Id)
 			newFlag := game.FlagGen.Generate(tickId, info.ID, service.Id, game.Signer)
 
-			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag, flagId)
+			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag)
 			if err != nil {
 				slog.Error("failed to run scorebot", "err", err)
 				success = false
