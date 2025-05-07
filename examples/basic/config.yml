@@ -155,10 +155,7 @@ scoring:
   points_per_stolen_flag: 100
   points_per_lost_flag: -100
 
-# Flags are valid for 1 second.
-flag_valid_time: 30s
-
-# The game will run for 5 seconds with 40 ticks.
+flag_valid_time: 25s
 tick_rate: 5s
 duration: 6000s
 

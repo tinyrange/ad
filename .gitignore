@@ -2,3 +2,4 @@ local/
 .DS_Store
 venv/
 app.db
+__pycache__
