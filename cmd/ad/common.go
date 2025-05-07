@@ -10,6 +10,7 @@ import (
 )
 
 const BOT_ID_OFFSET = 0xffff
+const SOC_ID_OFFSET = 0x1ffff
 
 const (
 	HOST_IP     = "10.40.0.1"

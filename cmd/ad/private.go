@@ -83,6 +83,10 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			headerRow = append(headerRow, htm.Text(service.Name()))
 		}
 
+		for _, service := range game.Config.Socbox.Services {
+			headerRow = append(headerRow, html.Textf("%s", service.Name()))
+		}
+
 		var teamList []htm.Group
 		for _, team := range game.Teams {
 			row := htm.Group{
@@ -92,6 +96,11 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 
 			for _, service := range game.Config.Vulnbox.Services {
 				serviceUrl := fmt.Sprintf("http://%s:%d", team.IP(), service.Port())
+				row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
+			}
+
+			for _, service := range game.Config.Socbox.Services {
+				serviceUrl := fmt.Sprintf("http://%s:%d", team.SocIP(), service.Port())
 				row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
 			}
 

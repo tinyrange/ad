@@ -751,8 +751,11 @@ func (game *AttackDefenseGame) instanceFromName(name string) (TinyRangeInstance,
 		if name == team.teamInstance.Hostname() {
 			return team.teamInstance, nil
 		}
-		if name == team.botInstance.Hostname() {
+		if team.botInstance != nil && name == team.botInstance.Hostname() {
 			return team.botInstance, nil
+		}
+		if team.socInstance != nil && name == team.socInstance.Hostname() {
+			return team.socInstance, nil
 		}
 	}
 

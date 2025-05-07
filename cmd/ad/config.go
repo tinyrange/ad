@@ -64,6 +64,12 @@ type HealthCheckConfig struct {
 	ExpectedOutput string          `yaml:"expected"`
 }
 
+type SocboxConfig struct {
+	InstanceConfig `yaml:",inline"`
+	InitTemplate   string          `yaml:"init"`
+	Services       []ServiceConfig `yaml:"services"`
+}
+
 type VulnboxConfig struct {
 	InstanceConfig `yaml:",inline"`
 	InitTemplate   string            `yaml:"init"`
@@ -142,6 +148,7 @@ type Config struct {
 	Wait          bool                  `yaml:"wait"`
 	WaitAfter     bool                  `yaml:"wait_after"`
 	Vulnbox       VulnboxConfig         `yaml:"vulnbox"`
+	Socbox        SocboxConfig          `yaml:"socbox"`
 	Device        DeviceGlobalConfig    `yaml:"device"`
 	ScoreBot      ScoreBotConfig        `yaml:"scorebot"`
 	TickRate      Duration              `yaml:"tick_rate"`
