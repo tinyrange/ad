@@ -208,10 +208,11 @@ func (t *tinyRangeInstance) Start(templateName string, wg WireguardInstance, sec
 		t.game.TinyRangeVMMPath,
 		"-wireguard-url", wg.ConfigUrl(),
 		"-secure-ssh", secureSSHPath,
+		"-persist-path", "persist",
 	}
 
 	if *verbose {
-		args = append(args, "--verbose")
+		args = append(args, "-verbose")
 	}
 
 	args = append(args, template)
