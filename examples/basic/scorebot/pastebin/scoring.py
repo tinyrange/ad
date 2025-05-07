@@ -1,6 +1,7 @@
 import requests
 import sys
 import json
+import hashlib
 
 
 def write_out(data):
@@ -18,29 +19,33 @@ def main(args):
         print("healthy", end="")
         return
 
-    teamIp, newFlag, servicePort = args
+    teamIp, newFlag, flagId, servicePort = args
 
     # Make a paste with the new flag
-    response = requests.post(f"http://{teamIp}:{servicePort}/api/paste", data={"content": newFlag})
+    password = hashlib.sha256(newFlag.encode()).hexdigest()[:12]
+    response = requests.post(
+        f"http://{teamIp}:{servicePort}/paste",
+        data={"id": flagId, "content": newFlag, "password": password}
+    )
 
     # Check if the paste was successful
     if response.status_code != 200:
-        write_error("Failed to create paste")
+        write_error(f"Failed to create paste: {response.text}")
         return
 
-    # Get the paste ID
-    pasteId = response.json()["id"]
-
     # Get the paste content
-    response = requests.get(f"http://{teamIp}:{servicePort}/api/paste/{pasteId}")
+    response = requests.post(
+        f"http://{teamIp}:{servicePort}/paste/{flagId}",
+        data={"password": password}
+    )
 
     # Check if the paste was found
     if response.status_code != 200:
-        write_error("Failed to get paste")
+        write_error(f"Failed to get paste: {response.text}")
         return
 
     # Check if the paste content is the same as the new flag
-    if response.json()["content"] != newFlag:
+    if newFlag not in response.text:
         write_error("Flag mismatch")
         return
 
