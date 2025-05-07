@@ -284,7 +284,7 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 	return FlagAccepted
 }
 
-func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) error {
+func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string, ram string) error {
 	game.templateMutex.Lock()
 	defer game.templateMutex.Unlock()
 
@@ -294,6 +294,11 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 		game.TinyRangePath, "login",
 		"--template",
 		"--load-config", resolvedFilename,
+		"--storage", "4096",
+	}
+
+	if ram != "" {
+		args = append(args, "--ram", ram)
 	}
 
 	if *verbose {
@@ -342,9 +347,9 @@ func (game *AttackDefenseGame) getCachedTemplate(templateFilename string) (strin
 	return filename, true
 }
 
-func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) error {
+func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string, ram string) error {
 	if _, ok := game.getCachedTemplate(templateFilename); !ok {
-		if err := game.cacheTinyRangeTemplate(templateFilename); err != nil {
+		if err := game.cacheTinyRangeTemplate(templateFilename, ram); err != nil {
 			return err
 		}
 	}
@@ -354,7 +359,7 @@ func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) err
 
 func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, config InstanceConfig) (TinyRangeInstance, error) {
 	// Check if the template is already cached.
-	if err := game.ensureTemplateCached(config.Template); err != nil {
+	if err := game.ensureTemplateCached(config.Template, config.Ram); err != nil {
 		return nil, err
 	}
 

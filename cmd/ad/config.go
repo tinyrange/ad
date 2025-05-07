@@ -49,6 +49,7 @@ type InstanceConfig struct {
 	Template string   `yaml:"template"`
 	Tags     TagList  `yaml:"tags"`
 	Flows    FlowList `yaml:"flows"`
+	Ram      string   `yaml:"ram"`
 }
 
 type HealthCheckKind string
