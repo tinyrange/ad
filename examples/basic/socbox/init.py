@@ -24,14 +24,14 @@ def main(args):
             "Tags": [
                 {
                     "Name": "tag/flag_out",
-                    "Definition": "sdata:flag{.*}",
+                    "Definition": "sdata:\"(flag{.*})|(flag%7B.*%7D)\"",
                     "Matches": None,
                     "Color": "#ff6666",
                     "Converters": []
                 },
                 {
                     "Name": "tag/flag_in",
-                    "Definition": "cdata:flag{.*}",
+                    "Definition": "cdata:\"(flag{.*})|(flag%7B.*%7D)\"",
                     "Matches": None,
                     "Color": "#66ff66",
                     "Converters": []
