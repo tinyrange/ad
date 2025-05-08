@@ -1,5 +1,5 @@
 local/
 .DS_Store
 venv/
-app.db
+*.db
 __pycache__

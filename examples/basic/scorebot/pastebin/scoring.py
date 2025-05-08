@@ -22,7 +22,7 @@ def main(args):
     teamIp, newFlag, flagId, servicePort = args
 
     # Make a paste with the new flag
-    password = hashlib.sha256(newFlag.encode()).hexdigest()[:12]
+    password = hashlib.sha512(newFlag.encode()).hexdigest()[:12]
     response = requests.post(
         f"http://{teamIp}:{servicePort}/paste",
         data={"id": flagId, "content": newFlag, "password": password}

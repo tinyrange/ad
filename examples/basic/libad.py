@@ -1,17 +1,99 @@
 #!/usr/bin/env python3
 
 from pwn import remote, context
-from typing import Union, Optional
-import sys
-import requests
+from typing import Union, Optional, Callable
 import re
+import requests
+import sqlite3
+import sys
 
 game_server = "10.40.0.1"
 flag_submission_port = 5000
 
 flag_regex = re.compile(r"flag\{[a-zA-Z0-9_\-\.]*\}")
 
-def submit_flag(flag: str) -> str:
+PERSISTENCE_DB = "libad.db"
+
+_has_initd_db = False
+
+def get_db():
+    global _has_initd_db
+    db = sqlite3.connect(PERSISTENCE_DB)
+    if not _has_initd_db:
+        init_db(db)
+        _has_initd_db = True
+    return db
+
+def init_db(db):
+    # The `flag_id` column is nullable, otherwise it would be the primary key.
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS submitted_flags (
+            flag TEXT PRIMARY KEY,
+            flag_id TEXT,
+            tick_id INTEGER,
+            team_id INTEGER,
+            service_id INTEGER,
+            response TEXT
+        )
+        """)
+    db.commit()
+
+class FlagId:
+    tick: int
+    team: int
+    service: int
+    value: str
+
+    def __init__(self, tick: int, team: int, service: int, value: str):
+        self.tick = tick
+        self.team = team
+        self.service = service
+        self.value = value
+
+    def __repr__(self) -> str:
+        return self.value
+
+def cache_flag_response(flag: str, flag_id: Optional[FlagId], response: str):
+    db = get_db()
+    tick_id, team_id, service_id = map(int, flag[5:].split(".")[:3])
+    db.execute(
+        """
+        INSERT INTO submitted_flags (
+            flag, flag_id, tick_id, team_id, service_id, response
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            flag, None if flag_id is None else flag_id.value,
+            tick_id, team_id, service_id, response
+        ]
+    )
+    db.commit()
+    db.close()
+
+def flag_id_has_been_captured(flag_id: FlagId) -> bool:
+    db = get_db()
+    result = db.execute(
+        "SELECT * FROM submitted_flags WHERE flag_id=? AND response='FLAG_ACCEPTED'",
+        [flag_id.value]
+    )
+    captured = result.fetchone() is not None
+    db.close()
+    return captured
+
+def cached_flag_response(flag: str) -> Optional[str]:
+    db = get_db()
+    result = db.execute("SELECT response FROM submitted_flags WHERE flag=?", [flag])
+    response = result.fetchone()
+    db.close()
+    return None if response is None else response[0]
+
+# If present, `flag_id` gets cached in addition to the flag and helps libad
+# avoid running your exploit against the same flag id twice. If not, only the
+# flag is cached.
+def submit_flag(flag: str, flag_id: Optional[FlagId] = None) -> str:
+    if (response := cached_flag_response(flag) is not None):
+        return "FLAG_ALREADY_STOLEN" if response == "FLAG_ACCEPTED" else response
+
     tmp = context.log_level
     context.log_level = "warn"
     p = remote(game_server, flag_submission_port)
@@ -20,6 +102,8 @@ def submit_flag(flag: str) -> str:
     response = p.recvline().decode().strip()
     p.close()
     context.log_level = tmp
+
+    cache_flag_response(flag, flag_id, response)
 
     return response
 
@@ -73,7 +157,7 @@ def fetch_teams() -> TeamStore:
     return store
 
 # Finds a team by id or name. Names are case insensitive.
-def team(identifier: Union[int, str]) -> Optional[Team]:
+def get_team(identifier: Union[int, str]) -> Optional[Team]:
     if _teams is None:
         fetch_teams()
     return _teams.team(identifier)
@@ -117,25 +201,10 @@ def fetch_services() -> ServiceStore:
     return store
 
 # Finds a service by id or name. Names are case insensitive.
-def service(identifier: Union[int, str]) -> Optional[Team]:
+def get_service(identifier: Union[int, str]) -> Optional[Team]:
     if _services is None:
         fetch_services()
     return _services.service(identifier)
-
-class FlagId:
-    tick: int
-    team: int
-    service: int
-    value: str
-
-    def __init__(self, tick: int, team: int, service: int, value: str):
-        self.tick = tick
-        self.team = team
-        self.service = service
-        self.value = value
-
-    def __repr__(self) -> str:
-        return self.value
 
 class FlagIdStore:
     _flag_ids: list[FlagId]
@@ -187,9 +256,43 @@ def fetch_flag_ids() -> FlagIdStore:
 # Find all flag ids matching the given criteria. `team` and `service` can
 # be either ids or names. Names are case insensitive. Shorthand for fetching
 # then filtering. Doesn't cache.
-def flag_ids(tick: int = None, team: Union[int, str] = None, service: Union[int, str] = None, skip_self: bool = False) -> list[FlagId]:
+def get_flag_ids(
+    tick: int = None, team: Union[int, str] = None,
+    service: Union[int, str] = None, skip_self: bool = False
+) -> list[FlagId]:
     flag_ids = fetch_flag_ids()
     return flag_ids.flag_ids(tick=tick, team=team, service=service, skip_self=skip_self)
+
+# Returns the number of new flags captured.
+def run_exploit(
+    exploit: Callable[tuple[str, FlagId], str],
+    service: Union[int, str],
+    teams: Optional[list[Union[int, str]]] = None
+) -> int:
+    if teams is None:
+        teams = [team.id for team in fetch_teams().teams if not team.is_self]
+
+    service = get_service(service)
+    for team in teams:
+        flag_ids = get_flag_ids(team=team, service=service.id)
+        team = get_team(team)
+        count = 0
+        for flag_id in flag_ids:
+            if flag_id_has_been_captured(flag_id):
+                continue
+            address = f"{team.ip}:{service.port}"
+            count += 1
+            try:
+                flag = exploit(address, flag_id)
+                response = submit_flag(flag, flag_id=flag_id)
+                print(f"({flag_id}/tick {flag_id.tick}/team {flag_id.team}/service {flag_id.service}) {response}")
+            except KeyboardInterrupt:
+                exit(1)
+            except Exception as e:
+                print(f"Failed to run exploit: {e}")
+    if count == 0:
+        print("No new flags")
+    return count
 
 def _usage():
     print("Usage: ./libad.py <command> <args ...>")
