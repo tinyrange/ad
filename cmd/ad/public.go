@@ -391,6 +391,10 @@ func (game *AttackDefenseGame) startPublicServer() error {
 					html.Div(
 						html.Link(device.ConfigUrl, html.Textf("Wireguard client config")),
 					),
+					// html.Form(
+					// 	html.FormTarget("DELETE", fmt.Sprintf("/api/device/%s", device.IP)),
+					// 	bootstrap.SubmitButton("Delete", bootstrap.ButtonColorDanger),
+					// ),
 				),
 			))
 		}
@@ -449,6 +453,25 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 		http.Redirect(w, r, "/devices", http.StatusFound)
 	})
+
+	// // DELETE /api/device/{ip} deletes a device.
+	// handler.HandleFunc("DELETE /api/device/{ip}", func(w http.ResponseWriter, r *http.Request) {
+	// 	if !game.checkForAdmin(w, r) {
+	// 		return
+	// 	}
+
+	// 	ip := r.PathValue("ip")
+
+	// 	if err := game.RemoveDevice(ip); err != nil {
+	// 		slog.Error("failed to remove device", "err", err)
+	// 		if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
+	// 			slog.Error("failed to render page", "err", err)
+	// 		}
+	// 		return
+	// 	}
+
+	// 	http.Redirect(w, r, "/devices", http.StatusFound)
+	// })
 
 	// GET /config lists the current YAML configuration and provides a button to download it.
 	handler.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
@@ -560,14 +583,14 @@ func (game *AttackDefenseGame) startPublicServer() error {
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
 	game.Router.RegisterMux(handler)
 
-	publicAddr := fmt.Sprintf("%s:%d", game.PublicIP, game.PublicPort)
+	listenAddr := fmt.Sprintf("%s:%d", game.ListenIP, game.PublicPort)
 
 	game.publicServer = &http.Server{
-		Addr:    publicAddr,
+		Addr:    listenAddr,
 		Handler: handler,
 	}
 
-	listener, err := net.Listen("tcp", publicAddr)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}

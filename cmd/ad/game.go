@@ -82,8 +82,11 @@ type AttackDefenseGame struct {
 	// TinyRangeVMMPath is the path to the tinyrange driver binary.
 	TinyRangeVMMPath string
 
-	// PublicIP is the public IP of the game.
-	PublicIP string
+	// IP is the IP that the game listens on.
+	ListenIP string
+
+	// ExternalIP is the IP that contestants will use to join the game. May differ from ListenIP if using a proxy to expose the game to the internet etc.
+	ExternalIP string
 
 	// PublicPort is the port used for the frontend of the game.
 	PublicPort int
@@ -186,7 +189,7 @@ func (game *AttackDefenseGame) Tags() TagList {
 }
 
 func (game *AttackDefenseGame) FrontendUrl() string {
-	return fmt.Sprintf("http://%s:%d", game.PublicIP, game.PublicPort)
+	return fmt.Sprintf("http://%s:%d", game.ListenIP, game.PublicPort)
 }
 
 func (game *AttackDefenseGame) ResolvePath(path string) string {
@@ -891,7 +894,7 @@ func (game *AttackDefenseGame) Run() error {
 		game.RouterMTU = 1420
 	}
 
-	game.Router, err = NewWireguardRouter(game.PublicIP, game.RouterMTU, game.FrontendUrl())
+	game.Router, err = NewWireguardRouter(game.ListenIP, game.ExternalIP, game.RouterMTU, game.FrontendUrl())
 	if err != nil {
 		return fmt.Errorf("failed to create wireguard router: %w", err)
 	}
@@ -951,7 +954,7 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		dev, err := game.addDevice(key, device.ID, device.Team)
+		dev, err := game.createDevice(key, device.ID, device.Team)
 		if err != nil {
 			return fmt.Errorf("failed to add device: %w", err)
 		}
@@ -967,6 +970,7 @@ func (game *AttackDefenseGame) Run() error {
 		}
 
 		dev.wg = wg
+		game.devices = append(game.devices, dev)
 
 		return nil
 	}); err != nil {
@@ -1056,7 +1060,7 @@ outer:
 	return nil
 }
 
-func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Device, error) {
+func (game *AttackDefenseGame) createDevice(name string, id int, team string) (*Device, error) {
 	if id < 0 {
 		id = len(game.devices)
 	}
@@ -1077,8 +1081,6 @@ func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Dev
 		return nil, fmt.Errorf("failed to parse flows for device (%s): %w", name, err)
 	}
 
-	game.devices = append(game.devices, dev)
-
 	return dev, nil
 }
 
@@ -1087,7 +1089,7 @@ func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 		return err
 	}
 
-	dev, err := game.addDevice(name, len(game.GetDevices()), team)
+	dev, err := game.createDevice(name, len(game.GetDevices()), team)
 	if err != nil {
 		return err
 	}
@@ -1103,6 +1105,7 @@ func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 	}
 
 	dev.wg = wg
+	game.devices = append(game.devices, dev)
 
 	if err := game.Persist.Set("devices", name, &DeviceConfig{
 		ID:     dev.id,

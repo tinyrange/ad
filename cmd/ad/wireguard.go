@@ -71,12 +71,13 @@ type WireguardRouter interface {
 
 // A wireguard router that generates wireguard configurations.
 type wireguardRouter struct {
-	mtx           sync.Mutex
-	publicAddress string
-	mtu           int
-	serverUrl     string
-	configSalt    string
-	configs       map[string]configEntry
+	mtx             sync.Mutex
+	listenAddress   string
+	externalAddress string
+	mtu             int
+	serverUrl       string
+	configSalt      string
+	configs         map[string]configEntry
 }
 
 type configEntry struct {
@@ -102,7 +103,7 @@ func (r *wireguardRouter) AddEndpoint(handler NetHandler, internalIp string) (Wi
 		return nil, err
 	}
 
-	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	peerConfig, err := wg.CreatePeer(r.listenAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +211,7 @@ PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s:%s
 `,
-			ip, privateKey, r.mtu, publicKey, r.publicAddress, listenPort,
+			ip, privateKey, r.mtu, publicKey, r.externalAddress, listenPort,
 		)
 	}
 
@@ -226,7 +227,7 @@ func (r *wireguardRouter) AddDevice(name string, handler NetHandler) (inst Wireg
 		return nil, "", err
 	}
 
-	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	peerConfig, err := wg.CreatePeer(r.externalAddress)
 	if err != nil {
 		return nil, "", err
 	}
@@ -303,17 +304,18 @@ func (r *wireguardRouter) RestoreDevice(name string, config string, handler NetH
 	return &wireguardInstance{wg: wg, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}, nil
 }
 
-func NewWireguardRouter(publicAddress string, mtu int, serverUrl string) (WireguardRouter, error) {
+func NewWireguardRouter(listenAddress string, externalAddress string, mtu int, serverUrl string) (WireguardRouter, error) {
 	salt, err := generateRandomString(8)
 	if err != nil {
 		return nil, err
 	}
 
 	return &wireguardRouter{
-		publicAddress: publicAddress,
-		mtu:           mtu,
-		serverUrl:     serverUrl,
-		configs:       make(map[string]configEntry),
-		configSalt:    salt,
+		listenAddress:   listenAddress,
+		externalAddress: externalAddress,
+		mtu:             mtu,
+		serverUrl:       serverUrl,
+		configs:         make(map[string]configEntry),
+		configSalt:      salt,
 	}, nil
 }
