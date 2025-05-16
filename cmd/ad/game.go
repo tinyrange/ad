@@ -82,8 +82,11 @@ type AttackDefenseGame struct {
 	// TinyRangeVMMPath is the path to the tinyrange driver binary.
 	TinyRangeVMMPath string
 
-	// PublicIP is the public IP of the game.
-	PublicIP string
+	// IP is the IP that the game listens on.
+	ListenIP string
+
+	// ExternalIP is the IP that contestants will use to join the game. May differ from ListenIP if using a proxy to expose the game to the internet etc.
+	ExternalIP string
 
 	// PublicPort is the port used for the frontend of the game.
 	PublicPort int
@@ -186,7 +189,7 @@ func (game *AttackDefenseGame) Tags() TagList {
 }
 
 func (game *AttackDefenseGame) FrontendUrl() string {
-	return fmt.Sprintf("http://%s:%d", game.PublicIP, game.PublicPort)
+	return fmt.Sprintf("http://%s:%d", game.ListenIP, game.PublicPort)
 }
 
 func (game *AttackDefenseGame) ResolvePath(path string) string {
@@ -232,6 +235,13 @@ func (game *AttackDefenseGame) teamFromTag(tag string) (team *Team, bot bool, er
 	return nil, false, fmt.Errorf("team not found: %s", tag)
 }
 
+func (game *AttackDefenseGame) flagsStolenBy(info TargetInfo, serviceId int) []FlagInfo {
+	return append(
+		game.OverallState.Teams[info.ID].Services[serviceId].StolenFlags,
+		game.CurrentState.Teams[info.ID].Services[serviceId].StolenFlags...,
+	)
+}
+
 func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStatus {
 	if !game.Running.Load() {
 		return GameNotRunning
@@ -264,10 +274,8 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 		return FlagNotYetValid
 	}
 
-	ownService := game.CurrentState.Teams[info.ID].Services[serviceId]
-
 	// Check if the flag has already been stolen.
-	for _, stolen := range ownService.StolenFlags {
+	for _, stolen := range game.flagsStolenBy(info, serviceId) {
 		if stolen.TeamId == teamId && stolen.TickId == tickId {
 			return FlagAlreadyStolen
 		}
@@ -275,6 +283,7 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 
 	slog.Info("flag accepted", "team", info.Name, "target", teamId, "service", serviceId, "tick", tickId)
 
+	ownService := game.CurrentState.Teams[info.ID].Services[serviceId]
 	ownService.StolenFlags = append(ownService.StolenFlags, FlagInfo{TeamId: teamId, TickId: tickId})
 
 	otherService := game.CurrentState.Teams[teamId].Services[serviceId]
@@ -284,7 +293,7 @@ func (game *AttackDefenseGame) submitFlag(info TargetInfo, flag string) FlagStat
 	return FlagAccepted
 }
 
-func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) error {
+func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string, ram string) error {
 	game.templateMutex.Lock()
 	defer game.templateMutex.Unlock()
 
@@ -294,6 +303,11 @@ func (game *AttackDefenseGame) cacheTinyRangeTemplate(templateFilename string) e
 		game.TinyRangePath, "login",
 		"--template",
 		"--load-config", resolvedFilename,
+		"--storage", "4096",
+	}
+
+	if ram != "" {
+		args = append(args, "--ram", ram)
 	}
 
 	if *verbose {
@@ -342,9 +356,9 @@ func (game *AttackDefenseGame) getCachedTemplate(templateFilename string) (strin
 	return filename, true
 }
 
-func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) error {
+func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string, ram string) error {
 	if _, ok := game.getCachedTemplate(templateFilename); !ok {
-		if err := game.cacheTinyRangeTemplate(templateFilename); err != nil {
+		if err := game.cacheTinyRangeTemplate(templateFilename, ram); err != nil {
 			return err
 		}
 	}
@@ -354,7 +368,7 @@ func (game *AttackDefenseGame) ensureTemplateCached(templateFilename string) err
 
 func (game *AttackDefenseGame) StartInstanceFromConfig(name string, ip string, config InstanceConfig) (TinyRangeInstance, error) {
 	// Check if the template is already cached.
-	if err := game.ensureTemplateCached(config.Template); err != nil {
+	if err := game.ensureTemplateCached(config.Template, config.Ram); err != nil {
 		return nil, err
 	}
 
@@ -503,10 +517,12 @@ func (game *AttackDefenseGame) setServiceOverallScore(service *ServiceState) {
 func (game *AttackDefenseGame) setTeamOverallScore(team *TeamState) {
 	score := 0.0
 
-	for _, service := range team.Services {
+	for i, service := range team.Services {
 		game.setServiceOverallScore(service)
 
-		score += service.Points
+		if !game.Config.Vulnbox.Services[i].Private {
+			score += service.Points
+		}
 	}
 
 	team.Points = score
@@ -683,11 +699,13 @@ func (game *AttackDefenseGame) Tick() error {
 			subCtx, cancel := context.WithTimeout(ctx, game.scaleDuration(service.Timeout.Duration))
 			defer cancel()
 
-			newFlag := game.FlagGen.Generate(int(game.CurrentTick), info.ID, service.Id, game.Signer)
+			tickId := int(game.CurrentTick)
+			newFlag := game.FlagGen.Generate(tickId, info.ID, service.Id, game.Signer)
 
 			success, message, err := service.Run(subCtx, &game.Config.ScoreBot, game, info, newFlag)
 			if err != nil {
-				return err
+				slog.Error("failed to run scorebot", "err", err)
+				success = false
 			}
 
 			slog.Info("scorebot response",
@@ -745,8 +763,14 @@ func (game *AttackDefenseGame) instanceFromName(name string) (TinyRangeInstance,
 	}
 
 	for _, team := range game.Teams {
-		if name == fmt.Sprintf("team_%d", team.ID) {
+		if name == team.teamInstance.Hostname() {
 			return team.teamInstance, nil
+		}
+		if team.botInstance != nil && name == team.botInstance.Hostname() {
+			return team.botInstance, nil
+		}
+		if team.socInstance != nil && name == team.socInstance.Hostname() {
+			return team.socInstance, nil
 		}
 	}
 
@@ -870,7 +894,7 @@ func (game *AttackDefenseGame) Run() error {
 		game.RouterMTU = 1420
 	}
 
-	game.Router, err = NewWireguardRouter(game.PublicIP, game.RouterMTU, game.FrontendUrl())
+	game.Router, err = NewWireguardRouter(game.ListenIP, game.ExternalIP, game.RouterMTU, game.FrontendUrl())
 	if err != nil {
 		return fmt.Errorf("failed to create wireguard router: %w", err)
 	}
@@ -930,7 +954,7 @@ func (game *AttackDefenseGame) Run() error {
 			return err
 		}
 
-		dev, err := game.addDevice(key, device.ID, "team")
+		dev, err := game.createDevice(key, device.ID, device.Team)
 		if err != nil {
 			return fmt.Errorf("failed to add device: %w", err)
 		}
@@ -946,6 +970,7 @@ func (game *AttackDefenseGame) Run() error {
 		}
 
 		dev.wg = wg
+		game.devices = append(game.devices, dev)
 
 		return nil
 	}); err != nil {
@@ -1035,7 +1060,7 @@ outer:
 	return nil
 }
 
-func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Device, error) {
+func (game *AttackDefenseGame) createDevice(name string, id int, team string) (*Device, error) {
 	if id < 0 {
 		id = len(game.devices)
 	}
@@ -1048,11 +1073,13 @@ func (game *AttackDefenseGame) addDevice(name string, id int, team string) (*Dev
 		ip:   net.IPv4(10, 40, 30, 1+byte(id)).String(),
 	}
 
+	if err := dev.ParseTags(); err != nil {
+		return nil, fmt.Errorf("failed to parse tags for device (%s): %w", name, err)
+	}
+
 	if err := dev.ParseFlows(); err != nil {
 		return nil, fmt.Errorf("failed to parse flows for device (%s): %w", name, err)
 	}
-
-	game.devices = append(game.devices, dev)
 
 	return dev, nil
 }
@@ -1062,7 +1089,7 @@ func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 		return err
 	}
 
-	dev, err := game.addDevice(name, len(game.GetDevices()), team)
+	dev, err := game.createDevice(name, len(game.GetDevices()), team)
 	if err != nil {
 		return err
 	}
@@ -1078,10 +1105,12 @@ func (game *AttackDefenseGame) AddDevice(name string, team string) error {
 	}
 
 	dev.wg = wg
+	game.devices = append(game.devices, dev)
 
 	if err := game.Persist.Set("devices", name, &DeviceConfig{
 		ID:     dev.id,
 		Config: deviceConfig,
+		Team:   team,
 	}); err != nil {
 		return err
 	}
@@ -1100,8 +1129,9 @@ func (game *AttackDefenseGame) GetDevices() []WireguardDevice {
 
 	for _, dev := range game.devices {
 		devices = append(devices, WireguardDevice{
-			Name: dev.name,
-			IP:   dev.ip,
+			ConfigUrl: dev.wg.ConfigUrl(),
+			Name:      dev.name,
+			IP:        dev.ip,
 		})
 	}
 

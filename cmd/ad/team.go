@@ -16,6 +16,7 @@ type TargetInfo struct {
 	Name  string
 	IP    string
 	IsBot bool
+	IsSoc bool
 }
 
 type Team struct {
@@ -23,10 +24,13 @@ type Team struct {
 	DisplayName string
 
 	teamInstance TinyRangeInstance
+	socInstance  TinyRangeInstance
 	botInstance  TinyRangeInstance
 }
 
-func (t *Team) BotId() int { return BOT_ID_OFFSET + t.ID }
+func (t *Team) BotId() int { return t.ID + BOT_ID_OFFSET }
+
+func (t *Team) SocId() int { return t.ID + SOC_ID_OFFSET }
 
 func (t *Team) GetSSHConfig() (SecureSSHConfig, error) {
 	if t.teamInstance == nil {
@@ -40,8 +44,12 @@ func (t *Team) IP() string {
 	return net.IPv4(10, 40, 10, 10+byte(t.ID)).String()
 }
 
-func (t *Team) BotIP() string {
+func (t *Team) SocIP() string {
 	return net.IPv4(10, 40, 20, 10+byte(t.ID)).String()
+}
+
+func (t *Team) BotIP() string {
+	return net.IPv4(10, 40, 30, 10+byte(t.ID)).String()
 }
 
 func (t *Team) Info() TargetInfo {
@@ -50,6 +58,7 @@ func (t *Team) Info() TargetInfo {
 		Name:  t.DisplayName,
 		IP:    t.IP(),
 		IsBot: false,
+		IsSoc: false,
 	}
 }
 
@@ -59,6 +68,17 @@ func (t *Team) BotInfo() TargetInfo {
 		Name:  t.DisplayName + "_bot",
 		IP:    t.BotIP(),
 		IsBot: true,
+		IsSoc: false,
+	}
+}
+
+func (t *Team) SocInfo() TargetInfo {
+	return TargetInfo{
+		ID:    t.SocId(),
+		Name:  t.DisplayName + "_soc",
+		IP:    t.SocIP(),
+		IsBot: false,
+		IsSoc: true,
 	}
 }
 
@@ -87,10 +107,12 @@ func (t *Team) runBotCommand(ctx context.Context, game *AttackDefenseGame, teamI
 	var buf strings.Builder
 
 	if err := commandTpl.Execute(&buf, &struct {
-		TeamIP      string
+		TargetIP    string
+		IP          string
 		TickSeconds float64
 	}{
-		TeamIP:      teamInfo.IP,
+		TargetIP:    teamInfo.IP,
+		IP:          botInfo.IP,
 		TickSeconds: game.scaleDuration(game.Config.TickRate.Duration).Seconds(),
 	}); err != nil {
 		return err
@@ -108,7 +130,12 @@ func (t *Team) runBotCommand(ctx context.Context, game *AttackDefenseGame, teamI
 }
 
 func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error {
-	initTpl, err := template.New("init").Parse(game.Config.Vulnbox.InitTemplate)
+	templateString := game.Config.Vulnbox.InitTemplate
+	if target.IsSoc {
+		templateString = game.Config.Socbox.InitTemplate
+	}
+
+	initTpl, err := template.New("init").Parse(templateString)
 	if err != nil {
 		return err
 	}
@@ -116,11 +143,17 @@ func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error 
 	var buf strings.Builder
 
 	if err := initTpl.Execute(&buf, &struct {
-		TeamIP   string
-		TeamName string
+		IP        string
+		VulnboxIP string
+		BotIP     string
+		SocboxIP  string
+		TeamName  string
 	}{
-		TeamIP:   target.IP,
-		TeamName: target.Name,
+		IP:        target.IP,
+		VulnboxIP: t.IP(),
+		BotIP:     t.BotIP(),
+		SocboxIP:  t.SocIP(),
+		TeamName:  target.Name,
 	}); err != nil {
 		return err
 	}
@@ -131,10 +164,12 @@ func (t *Team) runInitCommand(game *AttackDefenseGame, target TargetInfo) error 
 
 	var resp string
 
-	if !target.IsBot {
-		resp, err = t.teamInstance.RunCommand(ctx, buf.String())
-	} else {
+	if target.IsBot {
 		resp, err = t.botInstance.RunCommand(ctx, buf.String())
+	} else if target.IsSoc {
+		resp, err = t.socInstance.RunCommand(ctx, buf.String())
+	} else {
+		resp, err = t.teamInstance.RunCommand(ctx, buf.String())
 	}
 	if err != nil {
 		return fmt.Errorf("failed to run init command: %w %s", err, resp)
@@ -185,9 +220,9 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 			var buf strings.Builder
 
 			if err := t.Execute(&buf, &struct {
-				TeamIP string
+				IP string
 			}{
-				TeamIP: inst.InstanceAddress().String(),
+				IP: inst.InstanceAddress().String(),
 			}); err != nil {
 				return "", err
 			}
@@ -224,6 +259,32 @@ func (t *Team) Start(game *AttackDefenseGame) error {
 		if err := t.runInitCommand(game, t.BotInfo()); err != nil {
 			return fmt.Errorf("failed to run init command for bot: %w", err)
 		}
+	}
+
+	// If there is a soc, start the soc instance.
+	inst, err = game.StartInstanceFromConfig("team_"+t.DisplayName+"_soc", t.SocIP(), game.Config.Socbox.InstanceConfig)
+	if err != nil {
+		return err
+	}
+	t.socInstance = inst
+
+	if err := inst.ParseFlows(func(s string) (string, error) {
+		if s == "team" {
+			return t.DisplayName, nil
+		} else {
+			return "", fmt.Errorf("invalid flow variable: %s", s)
+		}
+	}); err != nil {
+		return fmt.Errorf("failed to parse flows for soc (%d): %w", t.SocId(), err)
+	}
+
+	for _, service := range game.Config.Socbox.Services {
+		inst.AddService(&service)
+	}
+
+	// Run the init command.
+	if err := t.runInitCommand(game, t.SocInfo()); err != nil {
+		return fmt.Errorf("failed to run init command for soc: %w", err)
 	}
 
 	return nil

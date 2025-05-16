@@ -39,7 +39,8 @@ var (
 	rebuild          = flag.Bool("rebuild", false, "Rebuild the tinyrange templates.")
 	wait             = flag.Bool("wait", false, "Wait for manual confirmation before starting the game.")
 	waitAfter        = flag.Bool("wait-after", false, "Keep services up after the game is complete.")
-	publicIp         = flag.String("ip", "127.0.0.1", "The public IP of the server.")
+	listenIp         = flag.String("listen-ip", "127.0.0.1", "The IP to listen on.")
+	externalIp       = flag.String("extern-ip", "", "The external IP of the server (can differ from -ip if using a proxy etc).")
 	publicPort       = flag.Int("port", 5100, "The public port of the server.")
 	persistancePath  = flag.String("persist-path", "local/persist", "The path to the config file.")
 	routerMTU        = flag.Int("router-mtu", 1420, "The MTU of the router.")
@@ -97,6 +98,10 @@ func appMain() error {
 		return fmt.Errorf("mismatched version: %d != %d", config.Version, CURRENT_CONFIG_VERSION)
 	}
 
+	if *externalIp == "" {
+		externalIp = listenIp
+	}
+
 	game := &AttackDefenseGame{
 		Persist:            NewPersistDatabase(persistDir),
 		Config:             config,
@@ -106,7 +111,8 @@ func appMain() error {
 		SshServerHostKey:   *sshServerHostKey,
 		TimeScale:          *timeScale,
 		rebuildTemplates:   *rebuild,
-		PublicIP:           *publicIp,
+		ListenIP:           *listenIp,
+		ExternalIP:         *externalIp,
 		PublicPort:         *publicPort,
 		RouterMTU:          *routerMTU,
 	}

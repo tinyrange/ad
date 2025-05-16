@@ -1,7 +1,8 @@
 version: 1
 builder: alpine@3.20
 files:
-    - scoring.py
+    - pastebin/
+    - post_office/
 packages:
     - python3
     - py3-requests

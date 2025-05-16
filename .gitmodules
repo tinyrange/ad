@@ -1,0 +1,3 @@
+[submodule "examples/basic/socbox/pkappa2"]
+	path = examples/basic/socbox/pkappa2
+	url = https://github.com/stackotter/pkappa2

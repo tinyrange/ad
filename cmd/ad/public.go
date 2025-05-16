@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 
 	"github.com/gomarkdown/markdown"
@@ -46,37 +48,52 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		return nil
 	}
 
+	// Generate table cell contents
 	var headerRow htm.Group
-	headerRow = append(headerRow, html.Text("#"))
-	headerRow = append(headerRow, html.Text("Name"))
-	headerRow = append(headerRow, html.Text("Points"))
-	for _, service := range game.Config.Vulnbox.Services {
-		headerRow = append(headerRow, html.Textf("%s Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Tick Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Attack Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Defense Points", service.Name()))
-		headerRow = append(headerRow, html.Textf("%s Uptime Points", service.Name()))
+	var subheaderRow htm.Group
+	headerSpans := []int{}
+	headerRow = append(headerRow, html.Text(""))
+	subheaderRow = append(subheaderRow,
+		html.Text("#"),
+		html.Text("Name"),
+		html.Text("Points"),
+	)
+	headerSpans = append(headerSpans, 3)
+	for _, service := range game.Config.Vulnbox.PublicServices() {
+		headerRow = append(headerRow, html.Textf("%s", service.Name()))
+		subheaderRow = append(subheaderRow,
+			html.Text("Points"),
+			html.Text("Tick"),
+			html.Text("Attack"),
+			html.Text("Defense"),
+			html.Text("Uptime"),
+		)
+		headerSpans = append(headerSpans, 5)
 	}
 
 	var rows []htm.Group
-	for _, team := range scoreboard.Teams {
+	sortedTeams := slices.Collect(maps.Values(scoreboard.Teams))
+	slices.SortFunc(sortedTeams, func(a, b *TeamState) int {
+		return a.Position - b.Position
+	})
+	for _, team := range sortedTeams {
 		row := htm.Group{
 			html.Textf("%d", team.Position),
 			html.Textf("%s", team.Name),
-			html.Textf("%f", team.Points),
+			html.Textf("%.2f", team.Points),
 		}
 
-		for _, service := range game.Config.Vulnbox.Services {
+		for _, service := range game.Config.Vulnbox.PublicServices() {
 			serviceState := team.Services[service.Id]
 			if serviceState == nil {
 				row = append(row, html.Text(""), html.Text(""), html.Text(""), html.Text(""), html.Text(""))
 			} else {
 				row = append(row,
-					html.Textf("%f", serviceState.Points),
-					html.Textf("%f", serviceState.TickPoints),
-					html.Textf("%f", serviceState.AttackPoints),
-					html.Textf("%f", serviceState.DefensePoints),
-					html.Textf("%f", serviceState.UptimePoints),
+					html.Textf("%.2f", serviceState.Points),
+					html.Textf("%.2f", serviceState.TickPoints),
+					html.Textf("%.2f", serviceState.AttackPoints),
+					html.Textf("%.2f", serviceState.DefensePoints),
+					html.Textf("%d%%", int(serviceState.UptimePoints*100)),
 				)
 			}
 		}
@@ -84,9 +101,65 @@ func (game *AttackDefenseGame) renderScoreboard() htm.Fragment {
 		rows = append(rows, row)
 	}
 
-	return bootstrap.Table(
-		headerRow,
-		rows,
+	// Render the table
+	var headerItems []htm.Fragment
+	for i, item := range headerRow {
+		headerItems = append(headerItems, htm.NewHtmlFragment("th",
+			htm.Attr("colspan", strconv.Itoa(headerSpans[i])),
+			htm.Attr("style", "text-align: center"),
+			item,
+		))
+	}
+
+	var colGroups []htm.Fragment
+	for i, span := range headerSpans {
+		// Add borders between column groups (services)
+		style := ""
+		if i != len(headerSpans)-1 {
+			style = "border-right: 1px solid var(--bs-table-border-color)"
+		}
+
+		colGroups = append(colGroups, htm.NewHtmlFragment("colgroup",
+			htm.Attr("span", strconv.Itoa(span)),
+			htm.Attr("style", style),
+		))
+	}
+
+	var subheaderItems []htm.Fragment
+	for _, item := range subheaderRow {
+		subheaderItems = append(subheaderItems, htm.NewHtmlFragment("th", item))
+	}
+
+	var rowItems []htm.Fragment
+	for _, item := range rows {
+		var row htm.Group
+		for _, cell := range item {
+			row = append(row, htm.NewHtmlFragment("td", cell))
+		}
+		rowItems = append(rowItems, htm.NewHtmlFragment("tr", row))
+	}
+
+	var fragments []htm.Fragment
+	fragments = append(fragments,
+		htm.Class("table"),
+		htm.Class("table-striped"),
+	)
+	for _, colGroup := range colGroups {
+		fragments = append(fragments, colGroup)
+	}
+	fragments = append(fragments,
+		htm.NewHtmlFragment("thead",
+			htm.NewHtmlFragment("tr", headerItems...),
+			htm.NewHtmlFragment("tr", subheaderItems...),
+		),
+		htm.NewHtmlFragment("tbody", rowItems...),
+	)
+
+	return html.Div(
+		htm.Class("table-responsive"),
+		htm.NewHtmlFragment("table",
+			fragments...,
+		),
 	)
 }
 
@@ -178,6 +251,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			instanceList = append(instanceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(instance.Hostname()),
+					bootstrap.CardTitle(instance.InstanceAddress().String()),
 					bootstrap.LinkButton("/connect/"+instance.Hostname(), bootstrap.ButtonColorPrimary, html.Text("Connect")),
 				),
 			))
@@ -313,12 +387,21 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			deviceList = append(deviceList, html.Div(
 				bootstrap.Card(
 					bootstrap.CardTitle(device.Name),
-					html.Div(html.Strong(html.Text("IP Adddress:")), html.Textf("%s", device.IP)),
+					html.Div(html.Strong(html.Text("IP Address:")), html.Textf("%s", device.IP)),
 					html.Div(
-						html.Pre(html.Code(html.Textf("%s", device.Config))),
+						html.Link(device.ConfigUrl, html.Textf("Wireguard client config")),
 					),
+					// html.Form(
+					// 	html.FormTarget("DELETE", fmt.Sprintf("/api/device/%s", device.IP)),
+					// 	bootstrap.SubmitButton("Delete", bootstrap.ButtonColorDanger),
+					// ),
 				),
 			))
+		}
+
+		teamNames := []string{}
+		for _, team := range game.Teams {
+			teamNames = append(teamNames, team.DisplayName)
 		}
 
 		page := game.publicPageLayout("Devices",
@@ -326,6 +409,7 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			html.Form(
 				html.FormTarget("POST", "/api/device"),
 				bootstrap.FormField("Name", "name", html.FormOptions{Kind: html.FormFieldText, Required: true, Value: "", Placeholder: "Device Name"}),
+				bootstrap.FormField("Team", "team", html.FormOptions{Kind: html.FormFieldSelect, Required: true, Value: "", Placeholder: "Team", Options: teamNames}),
 				bootstrap.SubmitButton("Add Device", bootstrap.ButtonColorPrimary),
 			),
 		)
@@ -350,7 +434,16 @@ func (game *AttackDefenseGame) startPublicServer() error {
 			return
 		}
 
-		if err := game.AddDevice(name, "team"); err != nil {
+		team := r.FormValue("team")
+
+		if team == "" {
+			if err := htm.Render(r.Context(), w, game.publicPageError(fmt.Errorf("team is required"))); err != nil {
+				slog.Error("failed to render page", "err", err)
+			}
+			return
+		}
+
+		if err := game.AddDevice(name, team); err != nil {
 			slog.Error("failed to add device", "err", err)
 			if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
 				slog.Error("failed to render page", "err", err)
@@ -360,6 +453,25 @@ func (game *AttackDefenseGame) startPublicServer() error {
 
 		http.Redirect(w, r, "/devices", http.StatusFound)
 	})
+
+	// // DELETE /api/device/{ip} deletes a device.
+	// handler.HandleFunc("DELETE /api/device/{ip}", func(w http.ResponseWriter, r *http.Request) {
+	// 	if !game.checkForAdmin(w, r) {
+	// 		return
+	// 	}
+
+	// 	ip := r.PathValue("ip")
+
+	// 	if err := game.RemoveDevice(ip); err != nil {
+	// 		slog.Error("failed to remove device", "err", err)
+	// 		if err := htm.Render(r.Context(), w, game.publicPageError(err)); err != nil {
+	// 			slog.Error("failed to render page", "err", err)
+	// 		}
+	// 		return
+	// 	}
+
+	// 	http.Redirect(w, r, "/devices", http.StatusFound)
+	// })
 
 	// GET /config lists the current YAML configuration and provides a button to download it.
 	handler.HandleFunc("GET /config", func(w http.ResponseWriter, r *http.Request) {
@@ -471,14 +583,14 @@ func (game *AttackDefenseGame) startPublicServer() error {
 	// Router is allowed to be public since it uses an API key to lookup a configuration.
 	game.Router.RegisterMux(handler)
 
-	publicAddr := fmt.Sprintf("%s:%d", game.PublicIP, game.PublicPort)
+	listenAddr := fmt.Sprintf("%s:%d", game.ListenIP, game.PublicPort)
 
 	game.publicServer = &http.Server{
-		Addr:    publicAddr,
+		Addr:    listenAddr,
 		Handler: handler,
 	}
 
-	listener, err := net.Listen("tcp", publicAddr)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %w", err)
 	}

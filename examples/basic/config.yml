@@ -7,22 +7,33 @@ vulnbox:
   # The template is a TinyRange configuration file that describes the vulnbox.
   template: vulnbox/vulnbox.yml
 
-  init: python3 /root/init.py {{ .TeamIP }} {{ .TeamName }}
+  init: python3 /root/init.py {{ .IP }} {{ .TeamName }}
 
   health_check:
     kind: http
-    url: "http://{{ .TeamIP }}:5000/health"
+    url: "http://{{ .IP }}:5000/health"
     expected: "OK"
 
   services:
     - id: 0
-      name: "Hello"
+      name: "Private SSH"
+      port: 2222
+      private: true
+      tags:
+        - private
+    - id: 1
+      name: "Pastebin"
       port: 5000
       tags:
         - public
-    - id: 1
-      name: "Private SSH"
-      port: 2222
+    - id: 2
+      name: "Post office"
+      port: 5001
+      tags:
+        - public
+    - id: 2
+      name: "PCAP Broker"
+      port: 4242
       private: true
       tags:
         - private
@@ -40,14 +51,18 @@ vulnbox:
 
   bot:
     # Bots inherit the services of the vulnbox.
-    enabled: true
+    enabled: false
 
     template: vulnbox/bot.yml
 
     # Bots can have events that are triggered by the timeline.
     events:
-      vuln1:
-        command: python3 /root/exploit1.py {{ .TeamIP }} {{ .TickSeconds }}
+      pastebin_vuln1:
+        command: python3 /root/pastebin/exploit1.py {{ .TargetIP }} {{ .TickSeconds }}
+        timeout: 2s
+        background: true
+      post_office_vuln1:
+        command: python3 /root/post_office/exploit1.py {{ .TargetIP }} {{ .TickSeconds }}
         timeout: 2s
         background: true
 
@@ -60,6 +75,37 @@ vulnbox:
       - public/*:public
       - team/{team}:public
       - bot/{team}:public
+
+# Configure the SoC box (traffic analysis web GUI)
+socbox:
+  template: socbox/socbox.yml
+
+  init: python3 /root/init.py {{ .VulnboxIP }}
+
+  flows:
+    - public/*:public
+    - team/*:public
+    - team/{team}:private
+    - bot/{team}:private
+
+  tags:
+    - team/{team}
+
+  ram: 2048
+
+  services:
+    - id: 0
+      name: "Private Socbox SSH"
+      port: 2222
+      private: true
+      tags:
+        - private
+    - id: 1
+      name: "Private Traffic Viewer"
+      port: 80
+      private: true
+      tags:
+        - private
 
 # Devices are externally joined machines.
 device:
@@ -77,8 +123,11 @@ scorebot:
 
   # Checks is a list of services to check.
   checks:
-    - id: 0
-      command: python3 /root/scoring.py {{ .TeamIP }} {{ .NewFlag }}
+    - id: 1
+      command: python3 /root/pastebin/scoring.py {{ .TargetIP }} {{ .NewFlag }} {{ .FlagId }} {{ .ServicePort }}
+      timeout: 1s
+    - id: 2
+      command: python3 /root/post_office/scoring.py {{ .TargetIP }} {{ .NewFlag }} {{ .ServicePort }}
       timeout: 1s
 
   services:
@@ -99,25 +148,22 @@ scorebot:
     - bot/*:public # The scorebot has access to all bots.
 
   # The health check is run after the scorebot is started.
-  health_check: python3 /root/scoring.py health
+  health_check: python3 /root/pastebin/scoring.py health
 
 scoring:
   points_per_tick: 100
   points_per_stolen_flag: 100
   points_per_lost_flag: -100
 
-# Flags are valid for 1 second.
-flag_valid_time: 1s
-
-# The game will run for 5 seconds with 40 ticks.
-tick_rate: 0.25s
-duration: 5s
+flag_valid_time: 25s
+tick_rate: 5s
+duration: 6000s
 
 timeline:
   # - at: 5s
   #   event: network/open/bots
-  - at: 1s
-    event: bot/vuln1
+  # - at: 1s
+  #   event: bot/vuln1
   # - at: 15s
   #   event: network/open
   # - at: 25s

@@ -18,7 +18,7 @@ type singleListener struct {
 
 // Accept implements net.Listener.
 func (s *singleListener) Accept() (net.Conn, error) {
-	if s.conn != nil {
+	if s.conn == nil {
 		return nil, io.EOF
 	}
 

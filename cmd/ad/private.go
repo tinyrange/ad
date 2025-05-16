@@ -28,6 +28,13 @@ func GetInfo(ctx context.Context) *TargetInfo {
 	return &t
 }
 
+type flagIdApiResponse struct {
+	Tick    int    `json:"tick"`
+	Team    int    `json:"team"`
+	Service int    `json:"service"`
+	Value   string `json:"value"`
+}
+
 type serviceApiResponse struct {
 	Id   int    `json:"id"`
 	Name string `json:"name"`
@@ -35,11 +42,10 @@ type serviceApiResponse struct {
 }
 
 type teamApiResponse struct {
-	Self        bool                 `json:"self"`
-	Id          int                  `json:"id"`
-	IP          string               `json:"ip"`
-	DisplayName string               `json:"display_name"`
-	Services    []serviceApiResponse `json:"services"`
+	Self bool   `json:"self"`
+	Id   int    `json:"id"`
+	IP   string `json:"ip"`
+	Name string `json:"name"`
 }
 
 func (game *AttackDefenseGame) privatePageError(err error) htm.Fragment {
@@ -83,6 +89,10 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 			headerRow = append(headerRow, htm.Text(service.Name()))
 		}
 
+		for _, service := range game.Config.Socbox.Services {
+			headerRow = append(headerRow, html.Textf("%s", service.Name()))
+		}
+
 		var teamList []htm.Group
 		for _, team := range game.Teams {
 			row := htm.Group{
@@ -92,6 +102,11 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 
 			for _, service := range game.Config.Vulnbox.Services {
 				serviceUrl := fmt.Sprintf("http://%s:%d", team.IP(), service.Port())
+				row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
+			}
+
+			for _, service := range game.Config.Socbox.Services {
+				serviceUrl := fmt.Sprintf("http://%s:%d", team.SocIP(), service.Port())
 				row = append(row, html.Link(serviceUrl, html.Textf("%s", serviceUrl)))
 			}
 
@@ -128,7 +143,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 					html.Id("flag-form"),
 					htmx.Post("/api/flag"),
 					htmx.Target("flag-result"),
-					bootstrap.FormField("flag", "Flag", html.FormOptions{
+					bootstrap.FormField("Flag", "flag", html.FormOptions{
 						Kind:     html.FormFieldText,
 						Required: true,
 						Value:    "",
@@ -144,7 +159,7 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 		}
 	})
 
-	// Add a API endpoint for submitting flags.
+	// Add an API endpoint for submitting flags.
 	game.privateServer.HandleFunc("POST /api/flag", func(w http.ResponseWriter, r *http.Request) {
 		info := GetInfo(r.Context())
 		if info == nil {
@@ -166,6 +181,42 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 		}
 
 		fmt.Fprintf(w, "%s\n", status)
+	})
+
+	// Add an API endpoint for listing current flag ids.
+	game.privateServer.HandleFunc("GET /api/flagIds", func(w http.ResponseWriter, r *http.Request) {
+		flagIds := make([]flagIdApiResponse, 0)
+		for _, team := range game.Teams {
+			// Iterate through services with scorebot checks (those are the ones with flags)
+			for _, serviceCheck := range game.Config.ScoreBot.Checks {
+				service := game.Config.Vulnbox.GetService(serviceCheck.Id)
+				if service == nil {
+					http.Error(w, fmt.Sprintf("check %id doesn't have corresponding service", serviceCheck.Id), http.StatusInternalServerError)
+					return
+				}
+
+				// Iterate through past few ticks. Exclude current tick because it may or may
+				// not have been inserted yet and we want to avoid leaking flag ids before
+				// they're used (otherwise people can create accounts with the same name on other
+				// teams' vulnboxes before the scorebot gets around to it).
+				for tickOffset := range game.FlagValidTicks() - 1 {
+					if tickOffset >= game.CurrentTick-1 {
+						continue
+					}
+					tickId := int(game.CurrentTick - tickOffset - 1)
+					flag := game.FlagGen.Generate(tickId, team.ID, service.Id, game.Signer)
+					flagId := flagIdApiResponse{
+						Tick:    tickId,
+						Team:    team.ID,
+						Service: service.Id,
+						Value:   GetFlagId(flag),
+					}
+					flagIds = append(flagIds, flagId)
+				}
+			}
+		}
+
+		json.NewEncoder(w).Encode(flagIds)
 	})
 
 	// GET /vulnbox renders the vulnbox connection info.
@@ -220,22 +271,28 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 
 		for i, team := range game.Teams {
 			teams[i] = teamApiResponse{
-				Self:        team.ID == playerTeam.ID,
-				Id:          team.ID,
-				IP:          team.IP(),
-				DisplayName: team.DisplayName,
-			}
-
-			for _, service := range game.Config.Vulnbox.Services {
-				teams[i].Services = append(teams[i].Services, serviceApiResponse{
-					Id:   service.Id,
-					Name: service.Name(),
-					Port: service.Port(),
-				})
+				Self: team.ID == playerTeam.ID,
+				Id:   team.ID,
+				IP:   team.IP(),
+				Name: team.DisplayName,
 			}
 		}
 
 		json.NewEncoder(w).Encode(teams)
+	})
+
+	// Add an API endpoint for getting a list of vulnbox services.
+	game.privateServer.HandleFunc("GET /api/vulnbox/services", func(w http.ResponseWriter, r *http.Request) {
+		services := make([]serviceApiResponse, len(game.Config.Vulnbox.PublicServices()))
+		for i, service := range game.Config.Vulnbox.PublicServices() {
+			services[i] = serviceApiResponse{
+				Id:   service.Id,
+				Name: service.Name(),
+				Port: service.Port(),
+			}
+		}
+
+		json.NewEncoder(w).Encode(services)
 	})
 
 	// GET /scoreboard lists the scoreboard for the overall state.
@@ -243,9 +300,11 @@ func (game *AttackDefenseGame) registerPrivateServer() error {
 		page := game.renderScoreboard()
 		if page == nil {
 			page = game.privatePageError(fmt.Errorf("game has not started"))
+		} else {
+			page = game.privatePageLayout("Scoreboard", page)
 		}
 
-		if err := htm.Render(r.Context(), w, game.privatePageLayout("Scoreboard", page)); err != nil {
+		if err := htm.Render(r.Context(), w, page); err != nil {
 			slog.Error("failed to render page", "err", err)
 		}
 	})

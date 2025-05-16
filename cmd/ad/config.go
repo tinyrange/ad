@@ -49,6 +49,7 @@ type InstanceConfig struct {
 	Template string   `yaml:"template"`
 	Tags     TagList  `yaml:"tags"`
 	Flows    FlowList `yaml:"flows"`
+	Ram      string   `yaml:"ram"`
 }
 
 type HealthCheckKind string
@@ -64,12 +65,37 @@ type HealthCheckConfig struct {
 	ExpectedOutput string          `yaml:"expected"`
 }
 
+type SocboxConfig struct {
+	InstanceConfig `yaml:",inline"`
+	InitTemplate   string          `yaml:"init"`
+	Services       []ServiceConfig `yaml:"services"`
+}
+
 type VulnboxConfig struct {
 	InstanceConfig `yaml:",inline"`
 	InitTemplate   string            `yaml:"init"`
 	HealthCheck    HealthCheckConfig `yaml:"health_check"`
 	Services       []ServiceConfig   `yaml:"services"`
 	Bot            BotConfig         `yaml:"bot"`
+}
+
+func (v *VulnboxConfig) GetService(id int) *ServiceConfig {
+	for _, service := range v.Services {
+		if service.Id == id {
+			return &service
+		}
+	}
+	return nil
+}
+
+func (v *VulnboxConfig) PublicServices() []ServiceConfig {
+	publicServices := []ServiceConfig{}
+	for _, service := range v.Services {
+		if !service.Private {
+			publicServices = append(publicServices, service)
+		}
+	}
+	return publicServices
 }
 
 type EventDefinition struct {
@@ -123,6 +149,7 @@ type Config struct {
 	Wait          bool                  `yaml:"wait"`
 	WaitAfter     bool                  `yaml:"wait_after"`
 	Vulnbox       VulnboxConfig         `yaml:"vulnbox"`
+	Socbox        SocboxConfig          `yaml:"socbox"`
 	Device        DeviceGlobalConfig    `yaml:"device"`
 	ScoreBot      ScoreBotConfig        `yaml:"scorebot"`
 	TickRate      Duration              `yaml:"tick_rate"`

@@ -71,12 +71,18 @@ type WireguardRouter interface {
 
 // A wireguard router that generates wireguard configurations.
 type wireguardRouter struct {
-	mtx           sync.Mutex
-	publicAddress string
-	mtu           int
-	serverUrl     string
-	configSalt    string
-	configs       map[string]string
+	mtx             sync.Mutex
+	listenAddress   string
+	externalAddress string
+	mtu             int
+	serverUrl       string
+	configSalt      string
+	configs         map[string]configEntry
+}
+
+type configEntry struct {
+	config   string
+	hostname string
 }
 
 func (r *wireguardRouter) configKeyFromHostname(hostname string) string {
@@ -97,14 +103,17 @@ func (r *wireguardRouter) AddEndpoint(handler NetHandler, internalIp string) (Wi
 		return nil, err
 	}
 
-	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	peerConfig, err := wg.CreatePeer(r.listenAddress)
 	if err != nil {
 		return nil, err
 	}
 
 	configKey := r.configKeyFromHostname(handler.Hostname())
 
-	r.configs[configKey] = peerConfig
+	r.configs[configKey] = configEntry{
+		config:   peerConfig,
+		hostname: handler.Hostname(),
+	}
 
 	return &wireguardInstance{wg: wg, internalIp: internalIp, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}, nil
 }
@@ -122,8 +131,9 @@ func (r *wireguardRouter) serveConfig(w http.ResponseWriter, req *http.Request) 
 
 	// Set the content type to plain text
 	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.conf\"", config.hostname))
 
-	if _, err := w.Write([]byte(config)); err != nil {
+	if _, err := w.Write([]byte(config.config)); err != nil {
 		slog.Error("failed to write config", "err", err)
 	}
 }
@@ -201,7 +211,7 @@ PublicKey = %s
 AllowedIPs = 10.40.0.0/16
 Endpoint = %s:%s
 `,
-			ip, privateKey, r.mtu, publicKey, r.publicAddress, listenPort,
+			ip, privateKey, r.mtu, publicKey, r.externalAddress, listenPort,
 		)
 	}
 
@@ -217,7 +227,7 @@ func (r *wireguardRouter) AddDevice(name string, handler NetHandler) (inst Wireg
 		return nil, "", err
 	}
 
-	peerConfig, err := wg.CreatePeer(r.publicAddress)
+	peerConfig, err := wg.CreatePeer(r.externalAddress)
 	if err != nil {
 		return nil, "", err
 	}
@@ -227,14 +237,18 @@ func (r *wireguardRouter) AddDevice(name string, handler NetHandler) (inst Wireg
 		return nil, "", err
 	}
 
-	r.configs[r.configKeyFromHostname(handler.Hostname())] = deviceConfig
+	configKey := r.configKeyFromHostname(handler.Hostname())
+	r.configs[configKey] = configEntry{
+		config:   deviceConfig,
+		hostname: handler.Hostname(),
+	}
 
 	config, err = wg.GetConfig()
 	if err != nil {
 		return nil, "", err
 	}
 
-	inst = &wireguardInstance{wg: wg}
+	inst = &wireguardInstance{wg: wg, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}
 
 	return
 }
@@ -281,22 +295,27 @@ func (r *wireguardRouter) RestoreDevice(name string, config string, handler NetH
 		return nil, err
 	}
 
-	r.configs[r.configKeyFromHostname(handler.Hostname())] = deviceConfig
+	configKey := r.configKeyFromHostname(handler.Hostname())
+	r.configs[configKey] = configEntry{
+		config:   deviceConfig,
+		hostname: handler.Hostname(),
+	}
 
-	return &wireguardInstance{wg: wg}, nil
+	return &wireguardInstance{wg: wg, configUrl: fmt.Sprintf("%s/wireguard/%s", r.serverUrl, configKey)}, nil
 }
 
-func NewWireguardRouter(publicAddress string, mtu int, serverUrl string) (WireguardRouter, error) {
+func NewWireguardRouter(listenAddress string, externalAddress string, mtu int, serverUrl string) (WireguardRouter, error) {
 	salt, err := generateRandomString(8)
 	if err != nil {
 		return nil, err
 	}
 
 	return &wireguardRouter{
-		publicAddress: publicAddress,
-		mtu:           mtu,
-		serverUrl:     serverUrl,
-		configs:       make(map[string]string),
-		configSalt:    salt,
+		listenAddress:   listenAddress,
+		externalAddress: externalAddress,
+		mtu:             mtu,
+		serverUrl:       serverUrl,
+		configs:         make(map[string]configEntry),
+		configSalt:      salt,
 	}, nil
 }

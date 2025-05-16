@@ -1,0 +1,16 @@
+version: 1
+builder: alpine@edge
+files:
+    - init.py
+    - pkappa2/build:/root/pkappa2
+packages:
+    - python3
+    - python3-dev
+    - wget
+    - curl
+    - git
+    - openrc
+    - bash
+    - icu-data-full
+min_spec:
+    ram: 2048

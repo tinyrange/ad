@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -49,19 +50,24 @@ func (v *ScoreBotServiceConfig) Run(ctx context.Context, sb *ScoreBotConfig, gam
 
 	var buf strings.Builder
 
+	service := game.Config.Vulnbox.GetService(v.Id)
 	if err := tpl.Execute(&buf, &struct {
-		TeamIP  string
-		NewFlag string
+		TargetIP    string
+		FlagId      string
+		NewFlag     string
+		ServicePort string
 	}{
-		TeamIP:  info.IP,
-		NewFlag: flag,
+		TargetIP:    info.IP,
+		FlagId:      GetFlagId(flag),
+		NewFlag:     flag,
+		ServicePort: strconv.Itoa(service.Port()),
 	}); err != nil {
 		return false, "", err
 	}
 
 	resp, err := sb.instance.RunCommand(ctx, buf.String())
 	if err != nil {
-		// This is considered a internal error.
+		// This is considered an internal error.
 		return false, "", err
 	}
 
